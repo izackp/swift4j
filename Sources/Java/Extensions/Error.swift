@@ -3,8 +3,8 @@ extension Error {
   public func toJavaObject() -> JavaObject? {
     guard let cls = JClass(fqn: "io/scade/swift4j/SwiftError") else {
       fatalError("Cannot find SwiftError class")
-    }
-    return cls.create("")
+    }    
+    return cls.create("Swift exception: \(self.localizedDescription)")
   }
 
   public func throwAsJavaException() {

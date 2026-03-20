@@ -70,16 +70,7 @@ class ProxyGenerator: SyntaxVisitor {
     var ctx = Context(package: package, settings: settings)
 
     let typeProxy = typeGen.generate(with: &ctx)
-
-    var imports = [String](ctx.imports)
-
-    if typeGen.isRefType {
-      if case .java(let version) = settings.language, version >= 9 {
-        imports.append("java.lang.ref.Cleaner")
-      }
-    }
-
-    return typeProxy.generate(in: package, with: imports)
+    return typeProxy.generate(in: package, with: ctx.imports)
   }
 
   func generatePackageClass() -> String {

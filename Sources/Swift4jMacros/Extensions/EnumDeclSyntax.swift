@@ -76,14 +76,14 @@ private static let \(caseName)_javaClass: JClass = {
     let fqn = fqn(from: context)
     let toJavaCases = caseDecls().map {
       let caseName = $0.name.text
-      let caseClass = fqn + "$" + caseName
+      let caseFqn = fqn + "$" + caseName
       let caseJClass = "Self.\(caseName)_javaClass"
 
       if $0.parameters.isEmpty {
         return
 """
 case .\(caseName):  
-  return \(caseJClass).getStatic(field: "INSTANCE", sig: "L\(caseClass);")
+  return \(caseJClass).getStatic(field: "INSTANCE", sig: "L\(caseFqn);")
 """
       } else {
         return
@@ -91,7 +91,7 @@ case .\(caseName):
 case .\(caseName):  
   let ptr = UnsafeMutablePointer<\(typeName)>.allocate(capacity: 1)
   ptr.initialize(to: self)
-  return \(caseJClass).create(Int(bitPattern: ptr), signature: "(J)V") 
+  return \(caseJClass).callStaticObjectMethod(method: "fromPtr", sig: "(J)L\(caseFqn);", Int(bitPattern: ptr))   
 """
       }
     }.joined(separator: "\n")

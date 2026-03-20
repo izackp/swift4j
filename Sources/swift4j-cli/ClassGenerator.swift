@@ -32,45 +32,6 @@ extension ClassGenerator: TypeGeneratorProtocol {
   func generate(with ctx: inout Context) -> TypeProxy {
     let ctors = ctorGens.enumerated().map{$1.generate(with: &ctx, index: $0)}.joined(separator: "\n\n")
 
-    let std_ctor_dtor: String
-    if case .java(let version) = settings.language, version >= 9 {
-      std_ctor_dtor =
-"""
-  private static final Cleaner cleaner = Cleaner.create();
-
-  private static class Deinit implements Runnable {
-      private final long _ptr;
-
-      Deinit(long ptr) {
-        _ptr = ptr;
-      }
-
-      public void run() {
-        \(name).deinit(_ptr);
-      }
-  }
-  
-  private static \(name) fromPtr(long ptr) {
-    var obj = new \(name)(new SwiftPtr(ptr));
-    cleaner.register(obj, new Deinit(ptr));
-    return obj;
-  }
-"""
-
-    } else {
-      std_ctor_dtor =
-"""
-  private static \(name) fromPtr(long ptr) {
-    return new \(name)(new SwiftPtr(ptr));    
-  }
-
-  @Override
-  public void finalize() {
-    \(name).deinit(_ptr.get());
-  }
-"""
-    }
-
     var class_init =
 """
   static {
@@ -84,12 +45,12 @@ extension ClassGenerator: TypeGeneratorProtocol {
 
   private static void class_init() {
     if(!class_initialized) {
-      \(name)_class_init(\(name).class);
+      \(name)_class_init();
       class_initialized = true;
     }
   }
   private static boolean class_initialized = false;
-  private static native void \(name)_class_init(Class<?> cls);
+  private static native void \(name)_class_init();
 """
     }
 
@@ -104,14 +65,16 @@ public \(nested ? "static" : "") class \(name) {
   private long _ptr() {
     return _ptr.get();
   }
-
-  private \(name)(SwiftPtr ptr) {
-     _ptr = ptr;
+  
+  private static \(name) fromPtr(long ptr) {
+    return new \(name)(new SwiftPtr(ptr, \(name)::deinit));
   }
   
-\(std_ctor_dtor)
-
   private static native void deinit(long ptr);
+  
+  private \(name)(SwiftPtr ptr) {
+    _ptr = ptr;
+  }
 
 \(ctors)
 

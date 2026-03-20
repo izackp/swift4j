@@ -78,30 +78,35 @@ public final class JClass: JObject, @unchecked Sendable {
     }
     return obj
   }
-  
-  public func create(_ args: [JConvertible], signature: String? = nil) -> JavaObject {
-    let sig = signature ?? "(\(args.reduce("", { $0 + type(of: $1).javaSignature})))V"
-    guard let ctorId = getMethodID(name: "<init>", sig: sig) else {
-      fatalError("Cannot find constructor with signature: \(sig)")
-    }
-    return create(ctor: ctorId, args.map{$0.toJavaParameter()})
-  }
-  
   public func create(ctor: JavaMethodID, _ params: JavaParameter...) -> JavaObject {
     return create(ctor: ctor, params)
   }
-  
+
   public func create(ctor: JavaMethodID, _ args: JParameterConvertible...) -> JavaObject {
     return create(ctor: ctor, args.map{$0.toJavaParameter()})
   }
-  
+
+  public func create(_ args: [JavaParameter], signature: String) -> JavaObject {
+    guard let ctorId = getMethodID(name: "<init>", sig: signature) else {
+      fatalError("Cannot find constructor with signature: \(signature)")
+    }
+    return create(ctor: ctorId, args)
+  }
+
+  public func create(_ args: [JConvertible], signature: String? = nil) -> JavaObject {
+    let sig = signature ?? "(\(args.reduce("", { $0 + type(of: $1).javaSignature})))V"
+    return create(args.map{$0.toJavaParameter()}, signature: sig)
+  }
+
   public func create(_ args: JConvertible..., signature: String? = nil) -> JavaObject {
     return create(args, signature: signature)
   }
-  
   public func create<T>(_ args: JConvertible..., signature: String? = nil) -> T where T: ObjectProtocol {
     return T(create(args, signature: signature))
   }
+
+
+
 
 
   public func getStatic<T: JConvertible>(field: JavaFieldID) -> T {

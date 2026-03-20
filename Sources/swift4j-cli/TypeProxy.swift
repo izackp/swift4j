@@ -4,7 +4,7 @@ protocol TypeProxy {
   var name: String { get }
   var source: String { get }
 
-  func generate(in package: String, with imports: [String]) -> (filename: String, source: String)
+  func generate(in package: String, with imports: any Collection<String>) -> (filename: String, source: String)
 }
 
 
@@ -12,7 +12,7 @@ struct JavaTypeProxy : TypeProxy {
   let name: String
   let source: String
 
-  func generate(in package: String, with imports: [String]) -> (filename: String, source: String) {
+  func generate(in package: String, with imports: any Collection<String>) -> (filename: String, source: String) {
     let content =
 """
 package \(package);
@@ -32,7 +32,7 @@ struct KotlinTypeProxy : TypeProxy {
   let name: String
   let source: String
 
-  func generate(in package: String, with imports: [String]) -> (filename: String, source: String) {
+  func generate(in package: String, with imports: any Collection<String>) -> (filename: String, source: String) {
     let content =
 """
 package \(package)

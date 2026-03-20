@@ -19,8 +19,6 @@ extension EnumGenerator: TypeGeneratorProtocol {
     return KotlinTypeProxy(name: name, source:
 """
 sealed class \(name)(protected val ptr: SwiftPtr) {
-  constructor(ptr: Long, owns: Boolean = true): this(SwiftPtr(ptr, owns))
-
   private companion object {
       val class_initialized: Boolean
       init {          
@@ -91,7 +89,7 @@ fileprivate extension EnumCaseElementSyntax {
     if parameters.isEmpty {
       return
 """
-  object \(jvmName) : \(enumName)(\(jvmExtCtorName)(), false)
+  object \(jvmName) : \(enumName)(SwiftPtr(\(jvmExtCtorName)()))
 """
     }
 
@@ -102,10 +100,17 @@ fileprivate extension EnumCaseElementSyntax {
 
     return
 """
-  class \(jvmName) internal constructor(ptr: Long): \(enumName)(ptr) {
+  class \(jvmName) internal constructor(ptr: SwiftPtr): \(enumName)(ptr) {
 \(parameters.map{$0.generateGetter(with: &ctx, for: jvmName)}.joined(separator: "\n\n"))
 
-    constructor(\(paramDecls)): this(\(jvmExtCtorName)(\(params)))
+    constructor(\(paramDecls)): this(SwiftPtr(\(jvmExtCtorName)(\(params)), \(enumName)::deinit))
+
+    private companion object {
+      @JvmStatic
+      fun fromPtr(ptr: Long): \(jvmName) {
+        return \(jvmName)(SwiftPtr(ptr, \(enumName)::deinit))
+      }      
+    }
   }
 """
   }
