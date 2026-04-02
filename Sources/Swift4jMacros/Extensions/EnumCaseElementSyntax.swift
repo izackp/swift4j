@@ -31,22 +31,18 @@ extension EnumCaseElementSyntax {
       :
 """
   struct Ptr {
-    nonisolated(unsafe)    
-    private static var lock = os_unfair_lock_s()
-    
     nonisolated(unsafe)
     private static let _ptr: UnsafeMutablePointer<\(typeDecl.name.text)> = {
       let ptr = UnsafeMutablePointer<\(typeDecl.name.text)>.allocate(capacity: 1)
       ptr.initialize(to: .\(name))
-      return ptr      
+      return ptr
     }()
 
     static var value: JavaLong {
-      os_unfair_lock_lock(&lock)
-      defer { os_unfair_lock_unlock(&lock) }
-      return JavaLong(Int(bitPattern: _ptr))
-    } 
+      JavaLong(Int(bitPattern: _ptr))
+    }
   }
+
   return Ptr.value
 """
 
