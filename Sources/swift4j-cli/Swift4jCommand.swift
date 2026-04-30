@@ -56,12 +56,12 @@ struct Swift4jCommand: ParsableCommand {
     let proxyGenerator = ProxyGenerator(package: package, javaVersion: javaVersion)
     let viewModelGenerator = ViewModelsGenerator(package: package)
 
-    for p in paths {
-      for res in try proxyGenerator.run(path: p) {
-        try write(res.source, to: res.filename)
-      }
+    for res in try proxyGenerator.run(paths: paths) {
+      try write(res.source, to: res.filename)
+    }
 
-      if generateAndroidViewModels {
+    if generateAndroidViewModels {
+      for p in paths {
         for res in try viewModelGenerator.run(path: p) {
           try write(res.content, to: "viewmodel/\(res.classname).kt")
         }

@@ -67,3 +67,6 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# swift4j test fixtures generated output
+test-fixtures/out-*/

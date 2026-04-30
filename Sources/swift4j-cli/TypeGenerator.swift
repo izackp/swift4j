@@ -28,7 +28,14 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
 
   var name: String { typeDecl.typeName }
 
-  var nested: Bool { typeDecl.parentDecl != nil }
+  /// True if this type is nested inside another @jvm type, considering
+  /// both syntactic nesting and extension-defined nesting.
+  var nested: Bool { settings.registry.parentDecl(of: typeDecl) != nil }
+
+  /// Walks the parent chain via the registry (extension-aware).
+  var registryParents: [any TypeDeclSyntax] {
+    return settings.registry.parents(of: typeDecl)
+  }
 
   init(_ typeDecl: T, settings: ProxyGenerator.Settings) {
     self.typeDecl = typeDecl
@@ -37,6 +44,12 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
     super.init(viewMode: .fixedUp)
 
     walk(typeDecl)
+
+    // Also walk all extensions of this type to discover nested types
+    // declared in extensions (cross-file or same-file).
+    for ext in settings.registry.extensions(ofType: typeDecl.typeName) {
+      walk(ext)
+    }
   }
 
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {

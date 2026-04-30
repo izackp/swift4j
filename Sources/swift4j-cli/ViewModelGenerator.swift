@@ -35,7 +35,7 @@ class ViewModelsGenerator: SyntaxVisitor {
 
   func generate(_ viewModelGen: ViewModelGenerator) -> String {
     var ctx = ProxyGenerator.Context(package: package,
-                                     settings: .init(language: .kotlin))
+                                     settings: .init(language: .kotlin, registry: TypeRegistry()))
 
     let viewModel = viewModelGen.generate(with: &ctx)
 

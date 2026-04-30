@@ -35,7 +35,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
     var class_init =
 """
   static {
-    \((typeDecl.parents.first ?? typeDecl).typeName).class_init();
+    \((registryParents.first ?? typeDecl).typeName).class_init();
   }
 """
 

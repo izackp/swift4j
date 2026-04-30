@@ -16,22 +16,25 @@ extension EnumGenerator: TypeGeneratorProtocol {
   }
 
   func generateSealedClass(with ctx: inout ProxyGenerator.Context) -> TypeProxy {
+    let nestedJava = nestedJavaSources(with: &ctx)
+    let nestedBlock = nestedJava.isEmpty ? "" : "\n\n\(nestedJava)"
+
     return KotlinTypeProxy(name: name, source:
 """
 sealed class \(name)(protected val ptr: SwiftPtr) {
   private companion object {
       val class_initialized: Boolean
-      init {          
-          \(name)_class_init()          
+      init {
+          \(name)_class_init()
           class_initialized = true
       }
 
-      @JvmStatic      
+      @JvmStatic
       external fun \(name)_class_init()
 
       @JvmStatic
       external fun deinit(ptr: Long)
-      
+
 \(
   typeDecl.caseDecls().map{
     $0.generateCaseExtCtor(with: &ctx)
@@ -51,20 +54,56 @@ sealed class \(name)(protected val ptr: SwiftPtr) {
       return ptr.get()
   }
 
-\(typeDecl.caseDecls().map{$0.generateCaseType(with: &ctx, in: typeDecl.typeName)}.joined(separator: "\n\n"))
+\(typeDecl.caseDecls().map{$0.generateCaseType(with: &ctx, in: typeDecl.typeName)}.joined(separator: "\n\n"))\(nestedBlock)
 }
 """
     )
   }
 
   func generateEnum(with ctx: inout ProxyGenerator.Context) -> TypeProxy {
-    return JavaTypeProxy(name: name, source:
+    let nestedJava = nestedJavaSources(with: &ctx)
+
+    if nestedJava.isEmpty {
+      return JavaTypeProxy(name: name, source:
 """
 public enum \(name) {
   \(typeDecl.cases().joined(separator: ", "));
 }
 """
+      )
+    }
+
+    // When the enum has nested @jvm types, emit the JNI class_init
+    // scaffolding so nested types can reference it from their static block.
+    return JavaTypeProxy(name: name, source:
+"""
+public enum \(name) {
+  \(typeDecl.cases().joined(separator: ", "));
+
+  static {
+    class_init();
+  }
+  private static void class_init() {
+    if(!class_initialized) {
+      \(name)_class_init();
+      class_initialized = true;
+    }
+  }
+  private static boolean class_initialized = false;
+  private static native void \(name)_class_init();
+
+\(nestedJava)
+}
+"""
     )
+  }
+
+  private func nestedJavaSources(with ctx: inout ProxyGenerator.Context) -> String {
+    return nestedTypeGens.compactMap { gen in
+      let proxy = gen.generate(with: &ctx)
+      guard proxy is JavaTypeProxy else { return nil }
+      return proxy.source
+    }.joined(separator: "\n\n")
   }
 }
 
