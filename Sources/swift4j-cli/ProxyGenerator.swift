@@ -148,6 +148,10 @@ private final class RegistryPopulator: SyntaxVisitor {
 
   override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
     registry.register(node)
-    return .visitChildren
+    // Do not descend into the extension body during registration. Types
+    // nested inside extensions are not top-level and must not be added
+    // to the top-level type table (which would shadow real types of the
+    // same name and pull in unrelated extensions).
+    return .skipChildren
   }
 }

@@ -47,7 +47,8 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
 
     // Also walk all extensions of this type to discover nested types
     // declared in extensions (cross-file or same-file).
-    for ext in settings.registry.extensions(ofType: typeDecl.typeName) {
+    let parents = settings.registry.parents(of: typeDecl)
+    for ext in settings.registry.extensions(of: typeDecl, parents: parents) {
       walk(ext)
     }
   }
