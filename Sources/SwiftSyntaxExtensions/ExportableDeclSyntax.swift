@@ -29,7 +29,7 @@ extension ExportableDeclSyntax {
 
   public var isExported: Bool {
     switch visibility {
-    case .private:
+    case .private, .internal:
       return false
     default:
       return !hasAttribute("nonjvm")
