@@ -34,6 +34,10 @@ extension IdentifierTypeSyntax: JvmMappedTypeSyntax {
     case "Float": primitivesAsObjects ? "Ljava/lang/Float;" : "F"
     case "Double": primitivesAsObjects ? "Ljava/lang/Double;" : "D"
     case "String": "Ljava/lang/String;"
+    // Foundation.Data bridges to Java byte[]. The JNI signature is the
+    // raw array form "[B", not the class-wrapped "L[B;" the default
+    // branch would emit.
+    case "Data": "[B"
       default: "L\\(\(description).javaName);" //"\\(\(name.text).javaSignature)"
     }
   }
