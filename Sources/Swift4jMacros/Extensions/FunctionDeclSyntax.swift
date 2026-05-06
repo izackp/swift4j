@@ -1,3 +1,4 @@
+import Foundation
 import SwiftSyntax
 import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
@@ -7,6 +8,38 @@ import SwiftSyntaxExtensions
 
 
 extension FunctionDeclSyntax {
+  /// True if `name.text` is a Swift operator (non-identifier characters).
+  /// Operators like `==`, `<`, `+` cannot be used as Swift identifiers in
+  /// generated JNI thunk names, so they are mapped via `bridgeName`.
+  var isOperator: Bool {
+    return name.text.unicodeScalars.contains { !($0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_")) }
+  }
+
+  /// Legal Swift/Java identifier derived from `name.text`.
+  /// For operators, returns a Java-friendly name (e.g. `equals`, `lessThan`).
+  /// For regular funcs, returns `name.text` unchanged.
+  var bridgeName: String {
+    switch name.text {
+    case "==": return "equals"
+    case "!=": return "notEquals"
+    case "<":  return "lessThan"
+    case ">":  return "greaterThan"
+    case "<=": return "lessThanOrEqual"
+    case ">=": return "greaterThanOrEqual"
+    case "+":  return "plus"
+    case "-":  return "minus"
+    case "*":  return "times"
+    case "/":  return "div"
+    case "%":  return "mod"
+    case "&":  return "and"
+    case "|":  return "or"
+    case "^":  return "xor"
+    case "<<": return "shl"
+    case ">>": return "shr"
+    default:   return name.text
+    }
+  }
+
   func jniSignature() throws -> String {
     let params = try (isStatic ? [] : ["J"]) + signature.jniSignatures()
     let returnSig = isAsync ? "Ljava/util/concurrent/CompletableFuture;" : try signature.returnClause?.type.jniSignature() ?? "V"
@@ -29,7 +62,7 @@ extension FunctionDeclSyntax {
       ? "\(typeDecl.typeName).self"
       : typeDecl.selfExpr
 
-    var name = name.text
+    var name = bridgeName
 
     if let num = num {
       name += "_\(num)"
@@ -46,7 +79,22 @@ fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(sepa
 
   func makeBridgingFunctionBody(selfExpr: String) throws -> String {
     let mapping = try signature.paramsMapping()
-    var call = "\(selfExpr).\(name.text)(\(mapping.mapped))"
+    var call: String
+    if isOperator {
+      // Swift forbids calling operators as `Type.==(a, b)`. Emit operator
+      // syntax `(a OP b)` for binary, `(OP a)` for unary.
+      let mapped = mapping.mapped
+      let parts = mapped.split(separator: ",", maxSplits: 1).map { String($0.trimmingCharacters(in: .whitespaces)) }
+      if parts.count == 2 {
+        call = "(\(parts[0]) \(name.text) \(parts[1]))"
+      } else if parts.count == 1 {
+        call = "(\(name.text)\(parts[0]))"
+      } else {
+        call = "\(selfExpr).\(name.text)(\(mapped))"
+      }
+    } else {
+      call = "\(selfExpr).\(name.text)(\(mapping.mapped))"
+    }
 
     if isAsync {
       call = "await \(call)"

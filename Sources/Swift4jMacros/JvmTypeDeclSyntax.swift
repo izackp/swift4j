@@ -161,7 +161,8 @@ extension JvmTypeDeclSyntax {
 
     let funcNatives: [String] = exportedDecls.funcDecls.enumerated().compactMap {
       guard let jniSig = try? $1.jniSignature() else { return nil }
-      return expandCreateNativeMethod(name: "\($1.name.text)Impl", sig: jniSig, fn: "\(fqn).\($1.name.text)_\($0)_jni")
+      let bridge = $1.bridgeName
+      return expandCreateNativeMethod(name: "\(bridge)Impl", sig: jniSig, fn: "\(fqn).\(bridge)_\($0)_jni")
     }
 
     let initNatives: [String] = exportedDecls.initDecls.enumerated().compactMap {
