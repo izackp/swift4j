@@ -23,6 +23,9 @@ extension TypeSyntax {
     } else if let typeSyntax = self.as(TupleTypeSyntax.self) {
       return typeSyntax
 
+    } else if let typeSyntax = self.as(DictionaryTypeSyntax.self) {
+      return typeSyntax
+
     } else if let typeSyntax = self.as(MemberTypeSyntax.self) {
       return typeSyntax
 
