@@ -36,7 +36,7 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       // hundreds.
       let bridgeable = modules.filter { $0.name != "Swift4j" && dependsOnSwift4j($0) }
       try bridgeable.forEach {
-        let pkgName = "swift." + $0.name.replacingOccurrences(of: "-", with: "_")
+        let pkgName = $0.name.replacingOccurrences(of: "-", with: "_")
         print("Generating bridging for '\($0.moduleName)' as Java package '\(pkgName)'...")
         try generate(for: $0,
                      pkgName: pkgName,
