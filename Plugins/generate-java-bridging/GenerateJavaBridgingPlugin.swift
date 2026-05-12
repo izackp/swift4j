@@ -7,6 +7,7 @@ import Foundation
 struct GenerateJavaBridgingPlugin: CommandPlugin {
 
   func performCommand(context: PluginContext, arguments: [String]) throws {
+    let overallStart = Date()
     let toolPath = try URL(filePath: context.tool(named: "swift4j-cli").path.string)
     let outputDir = context.pluginWorkDirectory
 
@@ -17,7 +18,9 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
     let products = prodNames.isEmpty
       ? context.package.products
       : try context.package.products(named: prodNames)
-    
+
+    print("[swift4j] generate-java-bridging start: \(products.count) product(s) [\(products.map{$0.name}.joined(separator: ", "))], outputDir=\(outputDir.string)")
+
     for prod in products  {
       let prodOutputDir = outputDir.appending(prod.name)
       let pkgsOutDir = prodOutputDir.appending(["main", "java"])
@@ -29,23 +32,29 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       try FileManager.default.createDirectory(at: URL(filePath: pkgsOutDir.string), withIntermediateDirectories: true)
 
       let modules = prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}
+      print("[swift4j] product '\(prod.name)': \(modules.count) reachable source module(s)")
       // Only run swift4j-cli on modules that actually depend on Swift4j.
       // Everything else (swift-syntax, GRDB, swift-crypto, the Swift4j runtime
       // target itself, etc.) has no @jvm types and would just emit noise — or,
       // worse, slow the plugin to a crawl when source files number in the
       // hundreds.
       let bridgeable = modules.filter { $0.name != "Swift4j" && dependsOnSwift4j($0) }
+      print("[swift4j] product '\(prod.name)': bridging \(bridgeable.count) module(s) [\(bridgeable.map{$0.name}.joined(separator: ", "))], skipping \(modules.count - bridgeable.count)")
       try bridgeable.forEach {
+        let moduleStart = Date()
         let pkgName = $0.name.replacingOccurrences(of: "-", with: "_")
-        print("Generating bridging for '\($0.moduleName)' as Java package '\(pkgName)'...")
+        let sourceCount = $0.sourceFiles.filter{ $0.path.string.hasSuffix(".swift") }.underestimatedCount
+        print("[swift4j]   '\($0.moduleName)' -> '\(pkgName)' (\(sourceCount) swift sources)")
         try generate(for: $0,
                      pkgName: pkgName,
                      pkgsOutDir: pkgsOutDir,
                      with: toolPath,
                      forwardArgs: argExtractor.remainingArguments,
                      copyJavaSources: copyJavaSources)
+        print("[swift4j]   '\($0.moduleName)' done in \(String(format: "%.2f", Date().timeIntervalSince(moduleStart)))s")
       }
     }
+    print("[swift4j] generate-java-bridging complete in \(String(format: "%.2f", Date().timeIntervalSince(overallStart)))s")
   }
 
   private func generate(for sourceModule: any SourceModuleTarget,
