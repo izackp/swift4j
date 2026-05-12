@@ -28,7 +28,14 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       }
       try FileManager.default.createDirectory(at: URL(filePath: pkgsOutDir.string), withIntermediateDirectories: true)
 
-      try prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}.forEach {
+      let modules = prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}
+      // Only run swift4j-cli on modules that actually depend on Swift4j.
+      // Everything else (swift-syntax, GRDB, swift-crypto, the Swift4j runtime
+      // target itself, etc.) has no @jvm types and would just emit noise — or,
+      // worse, slow the plugin to a crawl when source files number in the
+      // hundreds.
+      let bridgeable = modules.filter { $0.name != "Swift4j" && dependsOnSwift4j($0) }
+      try bridgeable.forEach {
         let pkgName = "swift." + $0.name.replacingOccurrences(of: "-", with: "_")
         print("Generating bridging for '\($0.moduleName)' as Java package '\(pkgName)'...")
         try generate(for: $0,
@@ -92,6 +99,38 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
     return String(packageName)
   }
 
+}
+
+
+/// True if the given source module pulls in the Swift4j target either directly
+/// or transitively via any product dependency.
+func dependsOnSwift4j(_ module: any SourceModuleTarget) -> Bool {
+  var seen = Set<String>()
+
+  func walk(_ deps: [TargetDependency]) -> Bool {
+    for dep in deps {
+      switch dep {
+      case .target(let t):
+        if t.name == "Swift4j" { return true }
+        if seen.insert(t.id).inserted, let sm = t.sourceModule, walk(sm.dependencies) {
+          return true
+        }
+      case .product(let p):
+        if p.name == "Swift4j" { return true }
+        for t in p.targets {
+          if t.name == "Swift4j" { return true }
+          if seen.insert(t.id).inserted, let sm = t.sourceModule, walk(sm.dependencies) {
+            return true
+          }
+        }
+      default:
+        continue
+      }
+    }
+    return false
+  }
+
+  return walk(module.dependencies)
 }
 
 
