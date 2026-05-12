@@ -19,48 +19,43 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       : try context.package.products(named: prodNames)
     
     for prod in products  {
-      let modules = prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}
-      let pkgName = prod.name.replacingOccurrences(of: "-", with: "_")
-      print("Generating bridging for product '\(prod.name)' (modules: \(modules.map{$0.moduleName}.joined(separator: ", ")))...")
-      try generate(modules: modules,
-                   pkgName: pkgName,
-                   with: toolPath,
-                   to: outputDir.appending(prod.name),
-                   forwardArgs: argExtractor.remainingArguments,
-                   copyJavaSources: copyJavaSources)
+      let prodOutputDir = outputDir.appending(prod.name)
+      let pkgsOutDir = prodOutputDir.appending(["main", "java"])
+      // Wipe once per product so a stale package from a previous run can't
+      // linger; per-module iterations below append to this directory.
+      if FileManager.default.fileExists(atPath: pkgsOutDir.string) {
+        try FileManager.default.removeItem(atPath: pkgsOutDir.string)
+      }
+      try FileManager.default.createDirectory(at: URL(filePath: pkgsOutDir.string), withIntermediateDirectories: true)
+
+      try prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}.forEach {
+        let pkgName = "swift." + $0.name.replacingOccurrences(of: "-", with: "_")
+        print("Generating bridging for '\($0.moduleName)' as Java package '\(pkgName)'...")
+        try generate(for: $0,
+                     pkgName: pkgName,
+                     pkgsOutDir: pkgsOutDir,
+                     with: toolPath,
+                     forwardArgs: argExtractor.remainingArguments,
+                     copyJavaSources: copyJavaSources)
+      }
     }
   }
 
-  private func generate(modules: [any SourceModuleTarget],
+  private func generate(for sourceModule: any SourceModuleTarget,
                         pkgName: String,
+                        pkgsOutDir: PackagePlugin.Path,
                         with toolPath: URL,
-                        to outputDir: PackagePlugin.Path,
                         forwardArgs args: [String],
                         copyJavaSources: Bool = false) throws {
 
-    let pkgsOutDir = outputDir.appending(["main", "java"])
-    let pkgOutPath = pkgsOutDir.string
-
-    if FileManager.default.fileExists(atPath: pkgOutPath) {
-      try FileManager.default.removeItem(atPath: pkgOutPath)
-    }
-
-    try FileManager.default.createDirectory(at: URL(filePath: pkgOutPath), withIntermediateDirectories: true)
-
-    let allSources = modules.flatMap { module in
-      module.sourceFiles.map{ $0.path.string }.filter{ $0.hasSuffix(".swift") }
-    }
-
     let arguments = args
-      + ["-o", pkgOutPath, "--package", pkgName]
-      + allSources
+      + ["-o", pkgsOutDir.string, "--package", pkgName]
+      + sourceModule.sourceFiles.map{ $0.path.string }.filter{$0.hasSuffix(".swift")}
 
     try Process.run(toolPath, arguments: arguments)
 
     if copyJavaSources {
-      for module in modules {
-        try self.copyJavaSources(from: module, to: pkgsOutDir)
-      }
+      try self.copyJavaSources(from: sourceModule, to: pkgsOutDir)
     }
   }
 
