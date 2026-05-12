@@ -19,7 +19,7 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       : try context.package.products(named: prodNames)
     
     for prod in products  {
-      try prod.targets.flatMap{$0.recursiveTargetSourceModules()}.forEach {
+      try prod.targets.flatMap{$0.recursiveTargetSourceModules(followProducts: true)}.forEach {
         print("Generating bridging for '\($0.moduleName)'...")
         try generate(for: $0, 
                      with: toolPath,
