@@ -40,16 +40,37 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
       // hundreds.
       let bridgeable = modules.filter { $0.name != "Swift4j" && dependsOnSwift4j($0) }
       print("[swift4j] product '\(prod.name)': bridging \(bridgeable.count) module(s) [\(bridgeable.map{$0.name}.joined(separator: ", "))], skipping \(modules.count - bridgeable.count)")
+
+      // Pre-pass: discover every @jvm top-level type contributed by each
+      // module so cross-module references can be qualified during the
+      // per-module generation pass below. Without this, e.g. an AuthBridge
+      // method returning `User` from another module would compile to an
+      // unqualified `User` reference that resolves to the current package.
+      var typeToPackage: [String: String] = [:]
+      for module in bridgeable {
+        let pkg = module.name.replacingOccurrences(of: "-", with: "_")
+        let names = try scanModuleTypes(module: module, with: toolPath)
+        for n in names {
+          // First-writer-wins; collisions across modules are unsupported and
+          // would already break the consumer JVM classpath.
+          if typeToPackage[n] == nil {
+            typeToPackage[n] = pkg
+          }
+        }
+        print("[swift4j]   scan '\(module.moduleName)' -> '\(pkg)' (\(names.count) @jvm types)")
+      }
+
       try bridgeable.forEach {
         let moduleStart = Date()
         let pkgName = $0.name.replacingOccurrences(of: "-", with: "_")
         let sourceCount = $0.sourceFiles.filter{ $0.path.string.hasSuffix(".swift") }.underestimatedCount
         print("[swift4j]   '\($0.moduleName)' -> '\(pkgName)' (\(sourceCount) swift sources)")
+        let externalArgs = externalTypeArgs(currentPackage: pkgName, typeToPackage: typeToPackage)
         try generate(for: $0,
                      pkgName: pkgName,
                      pkgsOutDir: pkgsOutDir,
                      with: toolPath,
-                     forwardArgs: argExtractor.remainingArguments,
+                     forwardArgs: argExtractor.remainingArguments + externalArgs,
                      copyJavaSources: copyJavaSources)
         print("[swift4j]   '\($0.moduleName)' done in \(String(format: "%.2f", Date().timeIntervalSince(moduleStart)))s")
       }
@@ -73,6 +94,47 @@ struct GenerateJavaBridgingPlugin: CommandPlugin {
     if copyJavaSources {
       try self.copyJavaSources(from: sourceModule, to: pkgsOutDir)
     }
+  }
+
+  /// Runs swift4j-cli in --scan-types mode against a module's swift sources.
+  /// Each line of stdout is a top-level @jvm type name.
+  private func scanModuleTypes(module: any SourceModuleTarget, with toolPath: URL) throws -> [String] {
+    let sources = module.sourceFiles
+      .map { $0.path.string }
+      .filter { $0.hasSuffix(".swift") }
+    if sources.isEmpty { return [] }
+
+    let pipe = Pipe()
+    let process = Process()
+    process.executableURL = toolPath
+    // --package is required by the CLI but unused in scan mode.
+    process.arguments = ["--scan-types", "--package", "scan"] + sources
+    process.standardOutput = pipe
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw GenError.scanFailed(module: module.name, code: process.terminationStatus)
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let text = String(data: data, encoding: .utf8) ?? ""
+    return text.split(whereSeparator: \.isNewline)
+      .map(String.init)
+      .filter { !$0.isEmpty }
+  }
+
+  /// Flattens `typeToPackage` to `--external-type Name=pkg` args, skipping
+  /// any type whose home package matches the module currently being generated
+  /// (those resolve via the local type registry, no qualification needed).
+  private func externalTypeArgs(currentPackage: String, typeToPackage: [String: String]) -> [String] {
+    var args: [String] = []
+    for (name, pkg) in typeToPackage where pkg != currentPackage {
+      args += ["--external-type", "\(name)=\(pkg)"]
+    }
+    return args
+  }
+
+  enum GenError: Error {
+    case scanFailed(module: String, code: Int32)
   }
 
   private func copyJavaSources(from sourceModule: any SourceModuleTarget,

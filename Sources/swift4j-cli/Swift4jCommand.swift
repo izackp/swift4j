@@ -19,6 +19,20 @@ struct Swift4jCommand: ParsableCommand {
           help: "Generate Android ViewModels for Swift Observables",)
   var generateAndroidViewModels: Bool = false
 
+  // Repeatable: `--external-type TypeName=java.package`. Lets the codegen
+  // emit `import java.package.TypeName;` when it encounters `TypeName` in
+  // a parameter/return position from a different Swift module. Without
+  // this, cross-package references compile to an unqualified name that
+  // resolves to the current package and fails to load.
+  @Option(name: .long,
+          parsing: .upToNextOption,
+          help: "External type to package mapping (TypeName=java.package)")
+  var externalType: [String] = []
+
+  @Flag(name: .long,
+        help: "Scan mode: print discovered @jvm top-level type names (one per line) to stdout and exit. Does not write any files.")
+  var scanTypes: Bool = false
+
   @Argument(help: "Input filenames.")
   var paths: [String] = []
   
@@ -53,7 +67,13 @@ struct Swift4jCommand: ParsableCommand {
 
 
   mutating func run() throws {
-    let proxyGenerator = ProxyGenerator(package: package, javaVersion: javaVersion)
+    if scanTypes {
+      try runScan()
+      return
+    }
+
+    let externalPackages = try parseExternalTypes()
+    let proxyGenerator = ProxyGenerator(package: package, javaVersion: javaVersion, externalPackages: externalPackages)
     let viewModelGenerator = ViewModelsGenerator(package: package)
 
     for res in try proxyGenerator.run(paths: paths) {
@@ -70,6 +90,25 @@ struct Swift4jCommand: ParsableCommand {
 
     // let packageClass = generator.generatePackageClass()
     // try packageClass.write(to: filename(for: "\(package)_module"), atomically: true, encoding: .utf8)
+  }
+
+  private func parseExternalTypes() throws -> [String: String] {
+    var map: [String: String] = [:]
+    for entry in externalType {
+      let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+        throw ValidationError("--external-type expects 'TypeName=java.package', got '\(entry)'")
+      }
+      map[parts[0]] = parts[1]
+    }
+    return map
+  }
+
+  private func runScan() throws {
+    let names = try ProxyGenerator.scanTopLevelJvmTypes(paths: paths).sorted()
+    for n in names {
+      print(n)
+    }
   }
 
   

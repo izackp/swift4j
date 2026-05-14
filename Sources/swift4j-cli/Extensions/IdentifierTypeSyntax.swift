@@ -52,7 +52,18 @@ extension IdentifierTypeSyntax: MappableTypeSyntax {
         return "Result"
       }()
 
-      default: name
+      default: resolveExternal(name: name, with: &ctx) ?? name
     }
+  }
+
+  /// Looks up the type in the per-invocation external-package map (populated
+  /// from `--external-type Name=java.package`). On hit, registers an import
+  /// for the qualified name and returns the unqualified name; on miss returns
+  /// nil so the caller falls back to emitting the bare identifier.
+  private static func resolveExternal(name: String, with ctx: inout ProxyGenerator.Context) -> String? {
+    guard let pkg = ctx.settings.externalPackages[name] else { return nil }
+    if pkg == ctx.package { return name }
+    ctx.imports.insert("\(pkg).\(name)")
+    return name
   }
 }
