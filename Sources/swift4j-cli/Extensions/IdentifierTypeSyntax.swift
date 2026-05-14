@@ -43,6 +43,10 @@ extension IdentifierTypeSyntax: MappableTypeSyntax {
         ctx.imports.insert("java.util.Date")
         return "Date"
       }()
+      case "URL": {
+        ctx.imports.insert("java.net.URL")
+        return "URL"
+      }()
       case "Result": {
         ctx.imports.insert("io.scade.swift4j.Result")
         return "Result"
