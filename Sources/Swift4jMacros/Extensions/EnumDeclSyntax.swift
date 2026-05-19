@@ -104,12 +104,12 @@ switch self {
 """
   }
 
-  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax]) throws -> String {
+  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> String {
     guard withAssociatedValues else { return "" }
-    return try expandRegisterNativesDefault(in: context, parents: parents)
+    return try expandRegisterNativesDefault(in: context, parents: parents, namespacePath: namespacePath)
   }
 
-  func expandCreateNativeMethods(parents: [any TypeDeclSyntax]) throws -> [String] {
+  func expandCreateNativeMethods(parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> [String] {
     let fqn = fqn(with: parents)
 
     let caseNatives = try caseDecls().flatMap { c in
@@ -130,7 +130,7 @@ switch self {
       return [caseCtorNatives] + caseParamNatives
     }
 
-    return try expandCreateNativeMethodsDefault(parents: parents) + caseNatives
+    return try expandCreateNativeMethodsDefault(parents: parents, namespacePath: namespacePath) + caseNatives
   }
 
   func expandJavaObjectDeclsAsEnum(in context: some MacroExpansionContext) throws -> String {
