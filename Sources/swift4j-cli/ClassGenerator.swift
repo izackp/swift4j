@@ -54,28 +54,45 @@ extension ClassGenerator: TypeGeneratorProtocol {
 """
     }
 
+    // When the Swift type conforms to `Error` / `LocalizedError`, emit the
+    // Java class as a Throwable subtype so JNI throws land as a typed
+    // exception on the Kotlin side. Override `getMessage` to dispatch to
+    // the Swift instance's `description` accessor (which the macro already
+    // exposes as `getDescriptionImpl(long)` whenever the Swift type declares
+    // `var description: String`).
+    let isError = typeDecl.conformsToError
+    let extendsClause = isError ? " extends Exception" : ""
+    let errorBridging = isError ?
+"""
+
+  @Override
+  public String getMessage() {
+    return this.getDescriptionImpl(_ptr());
+  }
+""" : ""
+
     let source =
 """
-public \(nested ? "static" : "") class \(name) {
+public \(nested ? "static" : "") class \(name)\(extendsClause) {
 
 \(class_init)
 
   private final SwiftPtr _ptr;
-    
+
   private long _ptr() {
     return _ptr.get();
   }
-  
+
   private static \(name) fromPtr(long ptr) {
     return new \(name)(new SwiftPtr(ptr, \(name)::deinit));
   }
-  
+
   private static native void deinit(long ptr);
-  
+
   private \(name)(SwiftPtr ptr) {
     _ptr = ptr;
   }
-
+\(errorBridging)
 \(ctors)
 
 \(varGens.map{$0.generate(with: &ctx)}.joined(separator: "\n\n"))

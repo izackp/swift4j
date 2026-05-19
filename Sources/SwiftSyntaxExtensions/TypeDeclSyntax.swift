@@ -79,6 +79,29 @@ public extension TypeDeclSyntax {
     let paramsClause = FunctionParameterClauseSyntax(parameters: FunctionParameterListSyntax(parameters))
     return InitializerDeclSyntax(signature: FunctionSignatureSyntax(parameterClause: paramsClause))
   }
+
+  /// True when the type's inheritance clause syntactically names `Error`,
+  /// `LocalizedError`, or `CustomNSError`. Doesn't follow protocol chains
+  /// (cross-file/cross-module conformance is invisible to syntax inspection)
+  /// — covers the common direct-conformance case used by `@jvm` error types.
+  var conformsToError: Bool {
+    let inheritanceClause: InheritanceClauseSyntax?
+    if let cls = self.asProtocol(DeclSyntaxProtocol.self) as? ClassDeclSyntax {
+      inheritanceClause = cls.inheritanceClause
+    } else if let str = self.asProtocol(DeclSyntaxProtocol.self) as? StructDeclSyntax {
+      inheritanceClause = str.inheritanceClause
+    } else if let enm = self.asProtocol(DeclSyntaxProtocol.self) as? EnumDeclSyntax {
+      inheritanceClause = enm.inheritanceClause
+    } else {
+      inheritanceClause = nil
+    }
+    guard let clause = inheritanceClause else { return false }
+    let errorNames: Set<String> = ["Error", "LocalizedError", "CustomNSError"]
+    return clause.inheritedTypes.contains { entry in
+      let name = entry.type.trimmedDescription
+      return errorNames.contains(name)
+    }
+  }
 }
 
 
