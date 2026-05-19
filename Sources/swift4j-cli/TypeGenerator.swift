@@ -39,7 +39,7 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
   /// in `extension Server`, one top-level) can coexist without colliding
   /// at the JNI class-registration layer.
   var namespacePath: [String] {
-    return settings.registry.namespacePath(forType: typeDecl.typeName)
+    return settings.registry.namespacePath(for: typeDecl)
   }
 
   /// Walks the parent chain via the registry (extension-aware).

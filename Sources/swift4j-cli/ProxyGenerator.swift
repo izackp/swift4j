@@ -204,7 +204,7 @@ private final class RegistryPopulator: SyntaxVisitor {
     if node.isExported {
       registry.register(node)
       if !extensionStack.isEmpty {
-        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
       }
     }
     return .skipChildren
@@ -214,7 +214,7 @@ private final class RegistryPopulator: SyntaxVisitor {
     if node.isExported {
       registry.register(node)
       if !extensionStack.isEmpty {
-        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
       }
     }
     return .skipChildren
@@ -224,7 +224,7 @@ private final class RegistryPopulator: SyntaxVisitor {
     if node.isExported {
       registry.register(node)
       if !extensionStack.isEmpty {
-        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
       }
     }
     return .skipChildren

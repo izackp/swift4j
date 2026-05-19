@@ -17,12 +17,16 @@ final class TypeRegistry {
   /// NOT a registered @jvm type — those extensions are treated as Swift
   /// namespaces and produce a Java subpackage on emission.
   ///
-  /// Lookups by unqualified type name return an empty array for non-
-  /// namespaced types. Cleared and rebuilt after registration completes via
-  /// `finalizeNamespaces()`, so any type whose namespace is itself a real
-  /// @jvm type gets reclassified as a regular nested type (handled by the
-  /// existing parents/inner-class machinery instead of the subpackage path).
-  private(set) var namespaceForType: [String: [String]] = [:]
+  /// Keyed by `SyntaxIdentifier` rather than `typeName` because the same
+  /// unqualified name can be used by multiple @jvm declarations (e.g.
+  /// `Subject` as both a top-level GRDB row and `Server.Subject` as a
+  /// network DTO). Indexing by name would tag the wrong declaration.
+  ///
+  /// Lookups by unknown identifier return an empty array (non-namespaced).
+  /// `finalizeNamespaces()` drops entries whose root namespace identifier
+  /// IS itself a registered @jvm type — those are real nested types
+  /// handled by the existing parents/inner-class machinery.
+  private(set) var namespaceForType: [SyntaxIdentifier: [String]] = [:]
 
   /// All extension blocks with their extended-type expressions captured as
   /// a list of identifiers (e.g. `extension Foo.Bar` -> ["Foo", "Bar"]).
@@ -36,8 +40,9 @@ final class TypeRegistry {
   /// registry populator when the declaration lives inside an extension of
   /// a simple-identifier extended type. Final namespace mapping is decided
   /// in `finalizeNamespaces()` once all top-level types are known.
-  func recordCandidateNamespace(forType typeName: String, path: [String]) {
-    namespaceForType[typeName] = path
+  func recordCandidateNamespace(for decl: any TypeDeclSyntax, path: [String]) {
+    namespaceForType[decl.id] = path
+    recordIdName(decl.id, decl.typeName)
   }
 
   /// Strip namespace records whose root identifier IS itself a registered
@@ -50,10 +55,48 @@ final class TypeRegistry {
     }
   }
 
-  /// Namespace path for the given unqualified type name, or `[]` if it is
-  /// not namespaced.
+  /// Namespace path for the given declaration, or `[]` if it is not
+  /// namespaced. Indexed by the decl's syntax identifier so co-named
+  /// types (e.g. `DBSubject.Subject` and `Server.Subject`) don't bleed.
+  func namespacePath(for decl: any TypeDeclSyntax) -> [String] {
+    return namespaceForType[decl.id] ?? []
+  }
+
+  /// Convenience for callers that resolved by name first. Looks up the
+  /// recorded top-level decl and returns its namespace path. Use the
+  /// decl-keyed variant where the decl is in hand.
   func namespacePath(forType typeName: String) -> [String] {
-    return namespaceForType[typeName] ?? []
+    guard let decl = topLevelTypes[typeName] else { return [] }
+    return namespacePath(for: decl)
+  }
+
+  /// True if any registered @jvm declaration with the given unqualified
+  /// type name lives under the given namespace path. Lets reference-site
+  /// mappers (e.g. `MemberTypeSyntax`) resolve `Server.Subject` to the
+  /// namespaced declaration even when a sibling top-level `Subject`
+  /// exists (which shadows it in `topLevelTypes` last-write-wins).
+  func hasNamespacedType(name typeName: String, under namespace: [String]) -> Bool {
+    return namespaceForType.contains { _, path in
+      guard path == namespace else { return false }
+      // Confirm at least one of the recorded declarations actually has
+      // this type name. Cheap linear walk over the small @jvm decl set.
+      return true
+    } && namespaceForType.keys.contains { key in
+      // Map identifier -> decl by scanning all extensions; topLevelTypes
+      // only stores last-written decl. Acceptable: namespaceForType is
+      // small.
+      return namespaceForType[key] == namespace && nameForId(key) == typeName
+    }
+  }
+
+  /// Reverse lookup: declaration's unqualified name from its syntax id.
+  /// Cached on first access; the working set is tiny.
+  private var idToName: [SyntaxIdentifier: String] = [:]
+  func recordIdName(_ id: SyntaxIdentifier, _ name: String) {
+    idToName[id] = name
+  }
+  func nameForId(_ id: SyntaxIdentifier) -> String? {
+    return idToName[id]
   }
 
   func register(_ ext: ExtensionDeclSyntax) {

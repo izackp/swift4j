@@ -17,8 +17,7 @@ extension MemberTypeSyntax: MappableTypeSyntax {
 
     // If the referenced type is registered as a `@jvm` type under this same
     // namespace, emit it as a subpackage-qualified import + bare type name.
-    let registeredNamespace = ctx.settings.registry.namespacePath(forType: typeName)
-    if registeredNamespace == [namespaceName] {
+    if ctx.settings.registry.hasNamespacedType(name: typeName, under: [namespaceName]) {
       ctx.imports.insert("\(ctx.package).\(namespaceName).\(typeName)")
       // Generics: defer to the generic args of the member name (rare path).
       if let genericArgs = genericArgumentClause?.arguments, !genericArgs.isEmpty {
