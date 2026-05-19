@@ -20,12 +20,16 @@ struct JavaTypeProxy : TypeProxy {
   func generate(in package: String, with imports: any Collection<String>) -> (filename: String, source: String) {
     let fullPackage: String
     let subdir: String
+    var importLines = imports.map { "import \($0);" }
     if namespacePath.isEmpty {
       fullPackage = package
       subdir = ""
     } else {
       fullPackage = ([package] + namespacePath).joined(separator: ".")
       subdir = namespacePath.joined(separator: "/") + "/"
+      // Namespaced subpackages can't see sibling top-level @jvm types in the
+      // base package without an explicit import. Pull all of them in.
+      importLines.append("import \(package).*;")
     }
     let content =
 """
@@ -33,7 +37,7 @@ package \(fullPackage);
 
 import io.scade.swift4j.SwiftPtr;
 
-\(imports.map{"import \($0);"}.joined(separator: "\n"))
+\(importLines.joined(separator: "\n"))
 
 \(source)
 """
