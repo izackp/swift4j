@@ -56,20 +56,46 @@ extension ClassGenerator: TypeGeneratorProtocol {
 
     // When the Swift type conforms to `Error` / `LocalizedError`, emit the
     // Java class as a Throwable subtype so JNI throws land as a typed
-    // exception on the Kotlin side. Override `getMessage` to dispatch to
-    // the Swift instance's `description` accessor (which the macro already
-    // exposes as `getDescriptionImpl(long)` whenever the Swift type declares
-    // `var description: String`).
+    // exception on the Kotlin side.
+    //
+    // For Kotlin's `t.message` to surface the Swift description, override
+    // `getMessage()` to delegate to whichever Swift accessor the type
+    // happens to provide:
+    //   - `var message: String` → swift4j already emits `getMessage()`, no override
+    //   - `var description: String` → call `getDescriptionImpl(_ptr())`
+    //   - `var errorDescription: String?` → call `getErrorDescriptionImpl(_ptr())`
+    //   - none → no override, inherit Throwable default (null)
     let isError = typeDecl.conformsToError
     let extendsClause = isError ? " extends Exception" : ""
-    let errorBridging = isError ?
+    let varNames: Set<String> = isError
+      ? Set(typeDecl.exportedDecls.varDecls.flatMap { $0.decls.map { $0.name } })
+      : []
+    let errorBridging: String
+    if isError && !varNames.contains("message") {
+      if varNames.contains("description") {
+        errorBridging =
 """
 
   @Override
   public String getMessage() {
     return this.getDescriptionImpl(_ptr());
   }
-""" : ""
+"""
+      } else if varNames.contains("errorDescription") {
+        errorBridging =
+"""
+
+  @Override
+  public String getMessage() {
+    return this.getErrorDescriptionImpl(_ptr());
+  }
+"""
+      } else {
+        errorBridging = ""
+      }
+    } else {
+      errorBridging = ""
+    }
 
     let source =
 """
