@@ -12,7 +12,7 @@ extension Error {
     guard let cls = JClass(fqn: "io/scade/swift4j/SwiftError") else {
       fatalError("Cannot find SwiftError class")
     }
-    return cls.create("Swift exception: \(self.localizedDescription)")
+    return cls.create("\(type(of: self)): \(self.localizedDescription)")
   }
 
   public func throwAsJavaException() {
