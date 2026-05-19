@@ -28,6 +28,22 @@ extension MemberTypeSyntax: MappableTypeSyntax {
       return qualified
     }
 
+    // Cross-module nested resolution: the scan pre-pass emits namespaced
+    // @jvm types in dotted form (e.g. "Server.Subject"), so a dotted entry
+    // in `externalPackages` resolves a reference to a namespaced type that
+    // lives in another module. Same collision rationale as above — sibling
+    // top-level types with the matching unqualified name shadow the import,
+    // so we emit the dotted path inline.
+    let dotted = "\(namespaceName).\(typeName)"
+    if let pkg = ctx.settings.externalPackages[dotted] {
+      let qualified = "\(pkg).\(namespaceName).\(typeName)"
+      if let genericArgs = genericArgumentClause?.arguments, !genericArgs.isEmpty {
+        let mappedGenericArgs = genericArgs.map { $0.argument.map(with: &ctx, primitivesAsObjects: true) }
+        return "\(qualified)<\(mappedGenericArgs.joined(separator: ", "))>"
+      }
+      return qualified
+    }
+
     // Fallback: try external-package resolution against the bare type name
     // (same behaviour as IdentifierTypeSyntax for unknown identifiers).
     return ctx.settings.externalPackages[typeName].map { _ in

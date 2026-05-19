@@ -128,9 +128,21 @@ extension ProxyGenerator.Context {
 }
 
 extension ProxyGenerator {
-  /// Scan-only pass used by build plugins to discover the @jvm top-level
-  /// types contributed by a module before any code generation runs. Returns
-  /// the set of unqualified type names that would be emitted as Java classes.
+  /// Scan-only pass used by build plugins to discover the @jvm types
+  /// contributed by a module before any code generation runs. Returns the
+  /// set of names that would be emitted as Java classes. Namespaced types
+  /// (declared inside `extension SomeNamespace { @jvm ... }`) appear in
+  /// dotted form (e.g. `Server.Subject`) AND in bare form, so consumers
+  /// that resolve cross-module references by either spelling find them.
+  ///
+  /// Both spellings are emitted because:
+  /// - The bare name is needed for `IdentifierTypeSyntax` resolution when
+  ///   a caller writes `Subject` and means the top-level @jvm type.
+  /// - The dotted name is needed for `MemberTypeSyntax` resolution when a
+  ///   caller writes `Server.Subject` and means the namespaced @jvm type
+  ///   that lives in the `Server` subpackage. Without the dotted entry,
+  ///   the lookup falls back to the bare-`Subject` mapping and resolves
+  ///   to the wrong Java class (the sibling top-level Subject).
   static func scanTopLevelJvmTypes(paths: [String]) throws -> Set<String> {
     let registry = TypeRegistry()
     for path in paths {
@@ -139,19 +151,31 @@ extension ProxyGenerator {
       let sourceFile = Parser.parse(source: source)
       ScanPopulator(registry: registry).walk(sourceFile)
     }
+    registry.finalizeNamespaces()
     var names: Set<String> = []
     for (name, decl) in registry.topLevelTypes where registry.parentDecl(of: decl) == nil {
       names.insert(name)
+      let namespace = registry.namespacePath(for: decl)
+      if !namespace.isEmpty {
+        names.insert((namespace + [name]).joined(separator: "."))
+      }
     }
     return names
   }
 }
 
-/// Pre-pass walker used by --scan-types. Only registers top-level @jvm
-/// declarations; identical to RegistryPopulator but kept distinct so the
-/// internal generation pass can evolve without surprising the scan output.
+/// Pre-pass walker used by --scan-types. Tracks namespace context so
+/// `extension Foo { @jvm struct Bar }` is reported as `Foo.Bar` in
+/// addition to the bare `Bar`. Mirrors RegistryPopulator's behaviour
+/// but kept distinct so the internal generation pass can evolve
+/// without surprising the scan output.
 private final class ScanPopulator: SyntaxVisitor {
   let registry: TypeRegistry
+
+  /// Stack of identifier-only extension extended-types currently being
+  /// traversed. Each entry contributes a namespace segment for any
+  /// `@jvm` type discovered inside its body.
+  private var extensionStack: [String] = []
 
   init(registry: TypeRegistry) {
     self.registry = registry
@@ -161,6 +185,9 @@ private final class ScanPopulator: SyntaxVisitor {
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
+      }
     }
     return .skipChildren
   }
@@ -168,6 +195,9 @@ private final class ScanPopulator: SyntaxVisitor {
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
+      }
     }
     return .skipChildren
   }
@@ -175,12 +205,21 @@ private final class ScanPopulator: SyntaxVisitor {
   override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(for: node, path: extensionStack)
+      }
     }
     return .skipChildren
   }
 
   override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
     registry.register(node)
+    guard let ident = node.extendedType.as(IdentifierTypeSyntax.self) else {
+      return .skipChildren
+    }
+    extensionStack.append(ident.name.text)
+    walk(node.memberBlock)
+    extensionStack.removeLast()
     return .skipChildren
   }
 }
