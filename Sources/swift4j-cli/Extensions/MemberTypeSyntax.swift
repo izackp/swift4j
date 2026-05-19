@@ -16,15 +16,16 @@ extension MemberTypeSyntax: MappableTypeSyntax {
     let typeName = name.text
 
     // If the referenced type is registered as a `@jvm` type under this same
-    // namespace, emit it as a subpackage-qualified import + bare type name.
+    // namespace, emit it fully-qualified. Importing `CaptureAPI.Server.Subject`
+    // would collide with a sibling top-level `Subject` in the same package,
+    // so emit the dotted path inline instead (`CaptureAPI.Server.Subject`).
     if ctx.settings.registry.hasNamespacedType(name: typeName, under: [namespaceName]) {
-      ctx.imports.insert("\(ctx.package).\(namespaceName).\(typeName)")
-      // Generics: defer to the generic args of the member name (rare path).
+      let qualified = "\(ctx.package).\(namespaceName).\(typeName)"
       if let genericArgs = genericArgumentClause?.arguments, !genericArgs.isEmpty {
         let mappedGenericArgs = genericArgs.map { $0.argument.map(with: &ctx, primitivesAsObjects: true) }
-        return "\(typeName)<\(mappedGenericArgs.joined(separator: ", "))>"
+        return "\(qualified)<\(mappedGenericArgs.joined(separator: ", "))>"
       }
-      return typeName
+      return qualified
     }
 
     // Fallback: try external-package resolution against the bare type name
