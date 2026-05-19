@@ -7,6 +7,7 @@ import SwiftSyntaxExtensions
 extension TypeSyntax {
   var supportedMappings: [any MappableTypeSyntax.Type] {[
     IdentifierTypeSyntax.self,
+    MemberTypeSyntax.self,
     FunctionTypeSyntax.self,
     ArrayTypeSyntax.self,
     AttributedTypeSyntax.self,

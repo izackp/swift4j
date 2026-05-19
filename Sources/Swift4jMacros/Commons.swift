@@ -31,6 +31,33 @@ extension MacroExpansionContext {
     lexicalContext.first?.asProtocol(DeclSyntaxProtocol.self) as? (any JvmTypeDeclSyntax)
   }
 
+  /// Names of `extension Foo { ... }` blocks enclosing the declaration being
+  /// expanded, ordered outermost-first. Used to namespace `@jvm` types so
+  /// e.g. `extension Server { @jvm struct Subject }` emits Java class
+  /// `Server.Subject` (inner class `Server$Subject` at JNI level) instead of
+  /// colliding with a top-level `Subject` declared elsewhere.
+  ///
+  /// Walks stop at the first real `TypeDeclSyntax` — past that point the
+  /// declaration is genuinely nested inside another type, and the existing
+  /// `parents` chain machinery already handles it.
+  ///
+  /// Only simple-identifier extended types are captured; member-typed
+  /// extensions (`extension Foo.Bar { … }`) are skipped to avoid
+  /// double-prefixing.
+  var namespaceParentNames: [String] {
+    var names: [String] = []
+    for node in lexicalContext {
+      if (node.asProtocol(DeclSyntaxProtocol.self) as? (any TypeDeclSyntax)) != nil {
+        break
+      }
+      if let ext = node.as(ExtensionDeclSyntax.self),
+         let id = ext.extendedType.as(IdentifierTypeSyntax.self) {
+        names.append(id.name.text)
+      }
+    }
+    return names.reversed()
+  }
+
   func executeAndWarnIfFails<T>(at node: some SyntaxProtocol, _ f: () throws -> T) -> T? {
     do {
       return try f()

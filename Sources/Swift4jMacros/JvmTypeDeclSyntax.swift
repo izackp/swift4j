@@ -17,9 +17,9 @@ protocol JvmTypeDeclSyntax: TypeDeclSyntax {
 
   func expandInitCall(params: String, throwing: Bool, initName: String) throws -> String
 
-  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax]) throws -> String
+  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> String
 
-  func expandCreateNativeMethods(parents: [any TypeDeclSyntax]) throws -> [String]
+  func expandCreateNativeMethods(parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> [String]
 }
 
 extension JvmTypeDeclSyntax {
@@ -33,31 +33,52 @@ extension JvmTypeDeclSyntax {
     return try expandJavaClassDeclDefault(in: context)
   }
 
-  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax]) throws -> String {
-    return try expandRegisterNativesDefault(in: context, parents: parents)
+  func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> String {
+    return try expandRegisterNativesDefault(in: context, parents: parents, namespacePath: namespacePath)
   }
 
-  func expandCreateNativeMethods(parents: [any TypeDeclSyntax]) throws -> [String] {
-    return try expandCreateNativeMethodsDefault(parents: parents)
+  func expandCreateNativeMethods(parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> [String] {
+    return try expandCreateNativeMethodsDefault(parents: parents, namespacePath: namespacePath)
   }
 }
 
 extension JvmTypeDeclSyntax {
   // Expand JVM class init function
   func expandPeer(in context: some MacroExpansionContext) throws -> [DeclSyntax] {
+    let namespacePath = context.namespaceParentNames
     let jniTypeName = typeName.replacingOccurrences(of: "_", with: "_1")
 
+    // Namespaced @jvm types (`extension Server { @jvm struct Subject }`) emit
+    // into a Java subpackage (`CaptureAPI.Server.Subject`), so the JNI cdecl
+    // package portion includes the namespace segments. Inner classes via real
+    // type nesting still use `$` but are handled by the `parents` chain elsewhere.
     var fqnEscaped = jniTypeName
+    let pkgSegments: [String]
     if let moduleName = moduleName(from: context) {
-      fqnEscaped = moduleName.replacingOccurrences(of: "_", with: "_1") + "_" + fqnEscaped
+      pkgSegments = [moduleName] + namespacePath
+    } else {
+      pkgSegments = namespacePath
+    }
+    if !pkgSegments.isEmpty {
+      let escaped = pkgSegments.map { $0.replacingOccurrences(of: "_", with: "_1") }
+      fqnEscaped = (escaped + [jniTypeName]).joined(separator: "_")
+    }
+
+    // Swift function name needs to stay a valid identifier across namespace
+    // segments (`Server_Subject_class_init`).
+    let cdeclFuncName: String
+    if namespacePath.isEmpty {
+      cdeclFuncName = "\(typeName)_class_init"
+    } else {
+      cdeclFuncName = (namespacePath + [typeName]).joined(separator: "_") + "_class_init"
     }
 
     let decl =
 """
 \( (isMainActorIsolated ?? false) ? "@MainActor" : "")
 @_cdecl("Java_\(fqnEscaped)_\(jniTypeName)_1class_1init")
-public func \(typeName)_class_init(_ env: UnsafeMutablePointer<JNIEnv>, _ cls: JavaClass?) {    
-  \(try expandRegisterNatives(in: context, parents: []))
+public func \(cdeclFuncName)(_ env: UnsafeMutablePointer<JNIEnv>, _ cls: JavaClass?) {
+  \(try expandRegisterNatives(in: context, parents: [], namespacePath: namespacePath))
 }
 """
     return ["\(raw: decl)"]
@@ -83,16 +104,24 @@ public func \(typeName)_class_init(_ env: UnsafeMutablePointer<JNIEnv>, _ cls: J
 
 
 extension JvmTypeDeclSyntax {
-  func fqn(with parents: [any TypeDeclSyntax]) -> String {
-    parents.isEmpty ? typeName : parents.map{$0.typeName}.joined(separator: ".") + "." + typeName
+  func fqn(with parents: [any TypeDeclSyntax], namespacePath: [String] = []) -> String {
+    let chain = namespacePath + parents.map { $0.typeName } + [typeName]
+    return chain.joined(separator: ".")
   }
 
   func fqn(from context: some MacroExpansionContext) -> String {
-    var fqn = typeName
+    let namespacePath = context.namespaceParentNames
+    // JNI binary name: package separated by `/`. Namespaced @jvm types live
+    // in a subpackage (`CaptureAPI/Server/Subject`), so namespaces join with
+    // `/` too. Real inner classes (via TypeDecl nesting) use `$` and are
+    // handled at the per-call-site fqn builders, not here.
+    var segments: [String] = []
     if let moduleName = moduleName(from: context) {
-      fqn = "\(moduleName)/\(fqn)"
+      segments.append(moduleName)
     }
-    return fqn
+    segments.append(contentsOf: namespacePath)
+    segments.append(typeName)
+    return segments.joined(separator: "/")
   }
 
   func moduleName(from context: some MacroExpansionContext) -> String? {
@@ -150,7 +179,11 @@ public nonisolated static var javaClass: JClass { __JClass__.shared }
 
 
 extension JvmTypeDeclSyntax {
-  func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax]) throws -> [String] {
+  func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax], namespacePath: [String] = []) throws -> [String] {
+    // Swift-side dispatch target: `(namespace+)?(parents+)?self.<member>`.
+    // Namespace segments aren't real Swift types; the call target is the
+    // Swift declaration itself, so we drop namespace from this chain and
+    // qualify only via real `parents`.
     let fqn = fqn(with: parents)
     let exportedDecls = exportedDecls
 
@@ -175,33 +208,47 @@ extension JvmTypeDeclSyntax {
     return initNatives + deinitNatives + varNatives + funcNatives
   }
 
-  func expandRegisterNativesDefault(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax] = []) throws -> String {
-    let fqn = parents.isEmpty ? typeName : parents.map{$0.typeName}.joined(separator: ".") + "." + typeName
+  func expandRegisterNativesDefault(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax] = [], namespacePath: [String] = []) throws -> String {
+    let natives = try expandCreateNativeMethods(parents: parents, namespacePath: namespacePath)
 
-    let natives = try expandCreateNativeMethods(parents: parents)
+    // Local variable suffix needs to be unique per type within the
+    // expandRegisterNatives scope; use the namespace + parent chain so
+    // namespaced + nested types don't collide on `\(typeName)_cls`.
+    let chainForVar = (namespacePath + parents.map { $0.typeName } + [typeName])
+      .joined(separator: "_")
 
     let cls_expr: String
-    if parents.isEmpty {
+    if parents.isEmpty && namespacePath.isEmpty {
       cls_expr = "cls"
     } else {
-      var jfqn = fqn.replacingOccurrences(of: ".", with: "$")
+      // JNI FindClass binary name. Package segments (module + namespace
+      // extensions) join with `/`; real `parents` (genuine type-nested @jvm
+      // declarations) join with `$` for inner-class lookup.
+      var pkgSegments: [String] = []
       if let moduleName = moduleName(from: context) {
-        jfqn = moduleName + "/" + jfqn
+        pkgSegments.append(moduleName)
       }
+      pkgSegments.append(contentsOf: namespacePath)
+      let pkgPart = pkgSegments.joined(separator: "/")
+
+      let innerClassChain = (parents.map { $0.typeName } + [typeName])
+        .joined(separator: "$")
+
+      let jfqn = pkgPart.isEmpty ? innerClassChain : "\(pkgPart)/\(innerClassChain)"
       cls_expr = "jni.FindClass(\"\(jfqn)\")"
     }
 
     let registerNatives =
 """
-  guard let \(typeName)_cls = \(cls_expr) else { return }
-  let \(typeName)_natives = [
+  guard let \(chainForVar)_cls = \(cls_expr) else { return }
+  let \(chainForVar)_natives = [
     \(natives.joined(separator: ",\n"))
   ]
-  let _ = jni.RegisterNatives(\(typeName)_cls, \(typeName)_natives)
+  let _ = jni.RegisterNatives(\(chainForVar)_cls, \(chainForVar)_natives)
 
   \(try exportedDecls.typeDecls
     .compactMap { $0 as? (any JvmTypeDeclSyntax) }
-    .map { try $0.expandRegisterNatives(in: context, parents: parents + [self]) }
+    .map { try $0.expandRegisterNatives(in: context, parents: parents + [self], namespacePath: namespacePath) }
     .joined(separator: "\n")
   )
 """

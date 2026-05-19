@@ -12,12 +12,48 @@ final class TypeRegistry {
   /// Limitation: assumes top-level type names are unique across input files.
   private(set) var topLevelTypes: [String: any TypeDeclSyntax] = [:]
 
+  /// Namespace path for each registered top-level @jvm type. Populated for
+  /// types declared inside `extension Foo { ... }` where `Foo` itself is
+  /// NOT a registered @jvm type — those extensions are treated as Swift
+  /// namespaces and produce a Java subpackage on emission.
+  ///
+  /// Lookups by unqualified type name return an empty array for non-
+  /// namespaced types. Cleared and rebuilt after registration completes via
+  /// `finalizeNamespaces()`, so any type whose namespace is itself a real
+  /// @jvm type gets reclassified as a regular nested type (handled by the
+  /// existing parents/inner-class machinery instead of the subpackage path).
+  private(set) var namespaceForType: [String: [String]] = [:]
+
   /// All extension blocks with their extended-type expressions captured as
   /// a list of identifiers (e.g. `extension Foo.Bar` -> ["Foo", "Bar"]).
   private(set) var allExtensions: [(path: [String], decl: ExtensionDeclSyntax)] = []
 
   func register(_ decl: any TypeDeclSyntax) {
     topLevelTypes[decl.typeName] = decl
+  }
+
+  /// Record a `@jvm` type's syntactic namespace path. Called by the
+  /// registry populator when the declaration lives inside an extension of
+  /// a simple-identifier extended type. Final namespace mapping is decided
+  /// in `finalizeNamespaces()` once all top-level types are known.
+  func recordCandidateNamespace(forType typeName: String, path: [String]) {
+    namespaceForType[typeName] = path
+  }
+
+  /// Strip namespace records whose root identifier IS itself a registered
+  /// `@jvm` top-level type — those are real type-nested declarations, not
+  /// namespaced ones, and must flow through the existing parents chain.
+  func finalizeNamespaces() {
+    namespaceForType = namespaceForType.filter { _, path in
+      guard let first = path.first else { return false }
+      return topLevelTypes[first] == nil
+    }
+  }
+
+  /// Namespace path for the given unqualified type name, or `[]` if it is
+  /// not namespaced.
+  func namespacePath(forType typeName: String) -> [String] {
+    return namespaceForType[typeName] ?? []
   }
 
   func register(_ ext: ExtensionDeclSyntax) {

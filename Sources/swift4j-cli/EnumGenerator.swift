@@ -64,7 +64,7 @@ sealed class \(name)(protected val ptr: SwiftPtr) {
     let nestedJava = nestedJavaSources(with: &ctx)
 
     if nestedJava.isEmpty {
-      return JavaTypeProxy(name: name, source:
+      return JavaTypeProxy(name: name, namespacePath: nested ? [] : namespacePath, source:
 """
 public enum \(name) {
   \(typeDecl.cases().joined(separator: ", "));
@@ -75,7 +75,7 @@ public enum \(name) {
 
     // When the enum has nested @jvm types, emit the JNI class_init
     // scaffolding so nested types can reference it from their static block.
-    return JavaTypeProxy(name: name, source:
+    return JavaTypeProxy(name: name, namespacePath: nested ? [] : namespacePath, source:
 """
 public enum \(name) {
   \(typeDecl.cases().joined(separator: ", "));

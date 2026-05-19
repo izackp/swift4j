@@ -91,6 +91,6 @@ public \(nested ? "static" : "") class \(name) {
 )
 }
 """
-    return JavaTypeProxy(name: name, source: source)
+    return JavaTypeProxy(name: name, namespacePath: nested ? [] : namespacePath, source: source)
   }
 }

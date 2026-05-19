@@ -32,6 +32,16 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
   /// both syntactic nesting and extension-defined nesting.
   var nested: Bool { settings.registry.parentDecl(of: typeDecl) != nil }
 
+  /// Namespace path for types declared inside a Swift namespace extension
+  /// (e.g. `extension Server { @jvm struct Subject }` → `["Server"]`).
+  /// Empty for top-level / type-nested declarations. Used to emit the type
+  /// into a Java subpackage so multiple Swift `Subject` declarations (one
+  /// in `extension Server`, one top-level) can coexist without colliding
+  /// at the JNI class-registration layer.
+  var namespacePath: [String] {
+    return settings.registry.namespacePath(forType: typeDecl.typeName)
+  }
+
   /// Walks the parent chain via the registry (extension-aware).
   var registryParents: [any TypeDeclSyntax] {
     return settings.registry.parents(of: typeDecl)

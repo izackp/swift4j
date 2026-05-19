@@ -85,6 +85,8 @@ class ProxyGenerator: SyntaxVisitor {
       RegistryPopulator(registry: settings.registry).walk(sourceFile)
     }
 
+    settings.registry.finalizeNamespaces()
+
     for sourceFile in parsedFiles {
       walk(sourceFile)
     }
@@ -188,6 +190,11 @@ private final class ScanPopulator: SyntaxVisitor {
 private final class RegistryPopulator: SyntaxVisitor {
   let registry: TypeRegistry
 
+  /// Stack of identifier-only extension extended-types currently being
+  /// traversed. Each entry contributes a namespace segment for any
+  /// `@jvm` type discovered inside its body.
+  private var extensionStack: [String] = []
+
   init(registry: TypeRegistry) {
     self.registry = registry
     super.init(viewMode: .fixedUp)
@@ -196,6 +203,9 @@ private final class RegistryPopulator: SyntaxVisitor {
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+      }
     }
     return .skipChildren
   }
@@ -203,6 +213,9 @@ private final class RegistryPopulator: SyntaxVisitor {
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+      }
     }
     return .skipChildren
   }
@@ -210,16 +223,25 @@ private final class RegistryPopulator: SyntaxVisitor {
   override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported {
       registry.register(node)
+      if !extensionStack.isEmpty {
+        registry.recordCandidateNamespace(forType: node.typeName, path: extensionStack)
+      }
     }
     return .skipChildren
   }
 
   override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
     registry.register(node)
-    // Do not descend into the extension body during registration. Types
-    // nested inside extensions are not top-level and must not be added
-    // to the top-level type table (which would shadow real types of the
-    // same name and pull in unrelated extensions).
+    // Descend INTO the extension to register @jvm types declared inside as
+    // namespaced types (subpackage emission). Only simple-identifier
+    // extended types are namespace candidates; member-typed extensions
+    // (`extension Foo.Bar { … }`) imply real nesting and are skipped.
+    guard let ident = node.extendedType.as(IdentifierTypeSyntax.self) else {
+      return .skipChildren
+    }
+    extensionStack.append(ident.name.text)
+    walk(node.memberBlock)
+    extensionStack.removeLast()
     return .skipChildren
   }
 }
