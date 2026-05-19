@@ -85,12 +85,13 @@ public extension TypeDeclSyntax {
   /// (cross-file/cross-module conformance is invisible to syntax inspection)
   /// — covers the common direct-conformance case used by `@jvm` error types.
   var conformsToError: Bool {
+    let syntax = Syntax(self)
     let inheritanceClause: InheritanceClauseSyntax?
-    if let cls = self.asProtocol(DeclSyntaxProtocol.self) as? ClassDeclSyntax {
+    if let cls = syntax.as(ClassDeclSyntax.self) {
       inheritanceClause = cls.inheritanceClause
-    } else if let str = self.asProtocol(DeclSyntaxProtocol.self) as? StructDeclSyntax {
+    } else if let str = syntax.as(StructDeclSyntax.self) {
       inheritanceClause = str.inheritanceClause
-    } else if let enm = self.asProtocol(DeclSyntaxProtocol.self) as? EnumDeclSyntax {
+    } else if let enm = syntax.as(EnumDeclSyntax.self) {
       inheritanceClause = enm.inheritanceClause
     } else {
       inheritanceClause = nil
