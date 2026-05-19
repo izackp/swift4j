@@ -41,18 +41,31 @@ public func execWithFuture(_ cl: @Sendable @escaping () async throws -> JavaObje
   let future = JCompletableFuture(javaObject)
 
   Task.detached {
+    // cl() returns a Java local reference. Local refs are only valid for
+    // the JNI call that produced them, but we then hop through Task.detached
+    // and `await MainActor.run` before calling future.complete(...). By
+    // that time the original JNI call has long returned and the local ref
+    // is invalid → `JNI ERROR: jobject is an invalid local reference` on
+    // CallBooleanMethodA. Upgrade to a global ref before the hop and
+    // release it after CompletableFuture.complete consumes it.
     let res: Result<JavaObject?, Error>
-
     do {
-      res = .success(try await cl())
+      if let local = try await cl() {
+        res = .success(jni.NewGlobalRef(local))
+      } else {
+        res = .success(nil)
+      }
     } catch {
       res = .failure(error)
     }
 
     await MainActor.run {
       switch res {
-        case .success(let val): _ = future.complete(val)
-        case .failure(let err): _ = future.complete(err)
+        case .success(let val):
+          _ = future.complete(val)
+          if let val { jni.DeleteGlobalRef(val) }
+        case .failure(let err):
+          _ = future.complete(err)
       }
     }
   }
