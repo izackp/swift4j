@@ -64,20 +64,34 @@ extension JvmTypeDeclSyntax {
       fqnEscaped = (escaped + [jniTypeName]).joined(separator: "_")
     }
 
-    // Swift function name needs to stay a valid identifier across namespace
-    // segments (`Server_Subject_class_init`).
-    let cdeclFuncName: String
-    if namespacePath.isEmpty {
-      cdeclFuncName = "\(typeName)_class_init"
-    } else {
-      cdeclFuncName = (namespacePath + [typeName]).joined(separator: "_") + "_class_init"
-    }
+    // Keep the Swift function name as a simple `<TypeName>_class_init` so it
+    // matches the `suffixed(_class_init)` clause on `@jvm`'s @attached(peer).
+    // The full namespaced JNI symbol is set separately via @_cdecl/@_silgen_name.
+    let cdeclFuncName = "\(typeName)_class_init"
 
+    // Top-level @jvm types emit a true global function with @_cdecl.
+    // Extension-namespaced @jvm types (e.g. `extension Server { @jvm struct
+    // Subject }`) get their peer expanded INSIDE the extension brace, where
+    // @_cdecl is rejected ("can only be applied to global functions").
+    // Use @_silgen_name on a `static` func instead: same linkage-name effect,
+    // legal inside an extension, and `static` keeps the function free of an
+    // implicit `self` so the JNI calling convention still matches.
+    let exportSymbol = "Java_\(fqnEscaped)_\(jniTypeName)_1class_1init"
+    let isExtensionNested = !namespacePath.isEmpty
+    let exportAttr: String
+    let funcDecl: String
+    if isExtensionNested {
+      exportAttr = "@_silgen_name(\"\(exportSymbol)\")"
+      funcDecl = "static public func"
+    } else {
+      exportAttr = "@_cdecl(\"\(exportSymbol)\")"
+      funcDecl = "public func"
+    }
     let decl =
 """
 \( (isMainActorIsolated ?? false) ? "@MainActor" : "")
-@_cdecl("Java_\(fqnEscaped)_\(jniTypeName)_1class_1init")
-public func \(cdeclFuncName)(_ env: UnsafeMutablePointer<JNIEnv>, _ cls: JavaClass?) {
+\(exportAttr)
+\(funcDecl) \(cdeclFuncName)(_ env: UnsafeMutablePointer<JNIEnv>, _ cls: JavaClass?) {
   \(try expandRegisterNatives(in: context, parents: [], namespacePath: namespacePath))
 }
 """
