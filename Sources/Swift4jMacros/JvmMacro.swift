@@ -100,7 +100,12 @@ extension JvmMacro: PeerMacro {
                                providingPeersOf declaration: some DeclSyntaxProtocol,
                                in context: some MacroExpansionContext) throws -> [DeclSyntax] {
 
-    guard context.lexicalContext.isEmpty else {
+    // Skip peer emission only when nested inside a real type — that outer type
+    // handles JNI registration. Types nested via extension namespace
+    // (e.g. `extension Server { @jvm struct Subject }`) still need their own
+    // `@_cdecl` register-natives so the JNI symbol matches the Java subpackage
+    // (`Java_CaptureAPI_Server_Subject_Subject_1class_1init`).
+    guard context.enclosingDeclType == nil else {
       return []
     }
 
