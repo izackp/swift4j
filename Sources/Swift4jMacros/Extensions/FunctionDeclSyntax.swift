@@ -78,22 +78,66 @@ fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(sepa
   }
 
   func makeBridgingFunctionBody(selfExpr: String) throws -> String {
-    let mapping = try signature.paramsMapping()
+    var stmts: [String] = []
+    var post: MappingRetType.PostFunc? = nil
     var call: String
-    if isOperator {
-      // Swift forbids calling operators as `Type.==(a, b)`. Emit operator
-      // syntax `(a OP b)` for binary, `(OP a)` for unary.
-      let mapped = mapping.mapped
-      let parts = mapped.split(separator: ",", maxSplits: 1).map { String($0.trimmingCharacters(in: .whitespaces)) }
-      if parts.count == 2 {
-        call = "(\(parts[0]) \(name.text) \(parts[1]))"
-      } else if parts.count == 1 {
-        call = "(\(name.text)\(parts[0]))"
+
+    if isAsync {
+      // Pre-decode each inbound param synchronously in the JNI entry frame.
+      // Inbound JNI object/array refs are local refs owned by the calling
+      // thread's transition frame. Inlining decodes inside the
+      // `execWithFuture { … }` closure runs them on Task.detached, where
+      // the caller's frame has already returned and the refs are dead →
+      // CheckJNI aborts with "invalid JNI transition frame reference".
+      var asyncArgs: [String] = []
+      for param in signature.parameters {
+        guard let pname = param.name else {
+          throw JvmMacrosError.message("Unsupported function parameter syntax")
+        }
+        let m = try param.type.fromJava(pname)
+        let local = "__pre_\(pname)"
+        stmts.append("let \(local) = \(m.mapped)")
+        stmts.append(contentsOf: m.stmts)
+        if let p = m.post {
+          post = (post == nil) ? p : { p(post!($0)) }
+        }
+        if let passedName = param.passedName {
+          asyncArgs.append("\(passedName): \(local)")
+        } else {
+          asyncArgs.append(local)
+        }
+      }
+      let argList = asyncArgs.joined(separator: ", ")
+      if isOperator {
+        if asyncArgs.count == 2 {
+          call = "(\(asyncArgs[0]) \(name.text) \(asyncArgs[1]))"
+        } else if asyncArgs.count == 1 {
+          call = "(\(name.text)\(asyncArgs[0]))"
+        } else {
+          call = "\(selfExpr).\(name.text)(\(argList))"
+        }
       } else {
-        call = "\(selfExpr).\(name.text)(\(mapped))"
+        call = "\(selfExpr).\(name.text)(\(argList))"
       }
     } else {
-      call = "\(selfExpr).\(name.text)(\(mapping.mapped))"
+      let mapping = try signature.paramsMapping()
+      stmts = mapping.stmts
+      post = mapping.post
+      if isOperator {
+        // Swift forbids calling operators as `Type.==(a, b)`. Emit operator
+        // syntax `(a OP b)` for binary, `(OP a)` for unary.
+        let mapped = mapping.mapped
+        let parts = mapped.split(separator: ",", maxSplits: 1).map { String($0.trimmingCharacters(in: .whitespaces)) }
+        if parts.count == 2 {
+          call = "(\(parts[0]) \(name.text) \(parts[1]))"
+        } else if parts.count == 1 {
+          call = "(\(name.text)\(parts[0]))"
+        } else {
+          call = "\(selfExpr).\(name.text)(\(mapped))"
+        }
+      } else {
+        call = "\(selfExpr).\(name.text)(\(mapping.mapped))"
+      }
     }
 
     if isAsync {
@@ -103,9 +147,6 @@ fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(sepa
     if isThrowing {
       call = "try \(call)"
     }
-
-    var stmts = mapping.stmts
-    var post = mapping.post
 
     if let retType = signature.returnClause?.type {
       if isAsync {
