@@ -110,6 +110,12 @@ switch self {
   }
 
   func expandCreateNativeMethods(parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> [String] {
+    // Simple enums (no associated values) are bridged as Java enum constants
+    // (INSTANCE / ordinal), not pointer-backed. They have no deinit_jni and
+    // no init/var/func natives — return nothing so callers don't emit a stale
+    // RegisterNatives block referencing a non-existent `Type.deinit_jni`.
+    guard withAssociatedValues else { return [] }
+
     let fqn = fqn(with: parents)
 
     let caseNatives = try caseDecls().flatMap { c in
