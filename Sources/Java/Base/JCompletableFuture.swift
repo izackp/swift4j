@@ -27,13 +27,9 @@ struct JCompletableFuture {
   }
 }
 
-public func execWithFuture<T: JObjectConvertible & Sendable> (_ cl: @Sendable @escaping () async throws -> T) -> JavaObject {
-  return execWithFuture {
-    return await try cl().toJavaObject()
-  }
-}
-
-public func execWithFuture(_ cl: @Sendable @escaping () async throws -> JavaObject?) -> JavaObject {
+public func execWithFuture<T: JObjectConvertible & Sendable>(
+  _ cl: @Sendable @escaping () async throws -> T
+) -> JavaObject {
   guard let javaObject = JCompletableFuture__class?.create() else {
     fatalError("CompletableFuture class is not available")
   }
@@ -41,16 +37,25 @@ public func execWithFuture(_ cl: @Sendable @escaping () async throws -> JavaObje
   let future = JCompletableFuture(javaObject)
 
   Task.detached {
-    // cl() returns a Java local reference. Local refs are only valid for
-    // the JNI call that produced them, but we then hop through Task.detached
-    // and `await MainActor.run` before calling future.complete(...). By
-    // that time the original JNI call has long returned and the local ref
-    // is invalid → `JNI ERROR: jobject is an invalid local reference` on
-    // CallBooleanMethodA. Upgrade to a global ref before the hop and
-    // release it after CompletableFuture.complete consumes it.
+    // Two JNI-lifecycle invariants must hold together:
+    //
+    // 1. JNI local refs are thread-local AND scoped to the frame that
+    //    created them. Using one on a different thread (or after the
+    //    creating frame returns) is undefined → CheckJNI aborts with
+    //    "invalid JNI transition frame reference".
+    //
+    // 2. We need to hand the Java value off to `future.complete(...)` on
+    //    Main (`await MainActor.run` below). That hop is a guaranteed
+    //    suspension + thread change.
+    //
+    // Therefore: `toJavaObject()` and `NewGlobalRef` MUST run in the same
+    // synchronous frame here, with no `await` in between. The global ref
+    // is safe to carry across the MainActor hop; the local is not.
     let res: Result<JavaObject?, Error>
     do {
-      if let local = try await cl() {
+      let value = try await cl()
+      let local = value.toJavaObject()
+      if let local {
         res = .success(jni.NewGlobalRef(local))
       } else {
         res = .success(nil)

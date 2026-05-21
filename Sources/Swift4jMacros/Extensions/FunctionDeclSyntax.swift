@@ -108,20 +108,30 @@ fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(sepa
     var post = mapping.post
 
     if let retType = signature.returnClause?.type {
-      let ret_mapping = try retType.toJava(call)
+      if isAsync {
+        // For async fns, the Swift value is passed unencoded to
+        // execWithFuture's generic-T overload, which performs
+        // `.toJavaObject()` + `NewGlobalRef` atomically on the same
+        // thread/frame. Encoding here would create a JNI local ref that
+        // Swift concurrency may then carry across an executor hop before
+        // promotion → "invalid JNI transition frame reference" abort.
+        call = "return \(call)"
+      } else {
+        let ret_mapping = try retType.toJava(call)
 
-      call = "return \(ret_mapping.mapped)"
-      stmts.append(contentsOf: ret_mapping.stmts)
+        call = "return \(ret_mapping.mapped)"
+        stmts.append(contentsOf: ret_mapping.stmts)
 
-      if let ret_post = ret_mapping.post {
-        post = (post == nil) ? ret_post : { ret_post(post!($0)) }
+        if let ret_post = ret_mapping.post {
+          post = (post == nil) ? ret_post : { ret_post(post!($0)) }
+        }
       }
     }
 
     if isAsync {
       call =
 """
-  return execWithFuture { 
+  return execWithFuture {
     \(call)
   }
 """
