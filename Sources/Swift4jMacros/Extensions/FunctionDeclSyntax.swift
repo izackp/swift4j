@@ -96,8 +96,10 @@ fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(sepa
         }
         let m = try param.type.fromJava(pname)
         let local = "__pre_\(pname)"
-        stmts.append("let \(local) = \(m.mapped)")
+        // m.stmts may bind helper locals (e.g. `_tags` for array decoded
+        // from JavaObject) that m.mapped then references. Emit them first.
         stmts.append(contentsOf: m.stmts)
+        stmts.append("let \(local) = \(m.mapped)")
         if let p = m.post {
           post = (post == nil) ? p : { p(post!($0)) }
         }
