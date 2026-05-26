@@ -41,14 +41,14 @@ public macro nonjvm() =
 // consumers see the annotated types as plain Swift declarations.
 @attached(peer)
 public macro jvm() =
-  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro jvm_exported() =
-  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro nonjvm() =
-  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 #endif

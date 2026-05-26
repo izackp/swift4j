@@ -8,8 +8,19 @@ struct SwiftJavaPlugin: CompilerPlugin {
     let providingMacros: [Macro.Type] = [
         JvmMacro.self,
         JvmExportedMacro.self,
-        NonjvmMacro.self
+        NonjvmMacro.self,
+        NoOpPeerMacro.self
     ]
+}
+
+public struct NoOpPeerMacro: PeerMacro {
+    public static func expansion(
+        of node: AttributeSyntax,
+        providingPeersOf declaration: some DeclSyntaxProtocol,
+        in context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
+        return []
+    }
 }
 
 
