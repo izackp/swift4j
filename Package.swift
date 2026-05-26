@@ -45,10 +45,17 @@ let package = Package(
                    .product(name: "SwiftCompilerPlugin", package: "swift-syntax")
                ]),
 
+        .macro(name: "Swift4jStubMacros",
+               dependencies: [
+                   .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                   .product(name: "SwiftCompilerPlugin", package: "swift-syntax")
+               ]),
+
         .target(name: "Swift4j",
                 dependencies: [
                   "Java",
-                  "Swift4jMacros"
+                  "Swift4jMacros",
+                  "Swift4jStubMacros"
                 ],
                 resources: [
                   .process("java/io/scade/swift4j/Result.java"),

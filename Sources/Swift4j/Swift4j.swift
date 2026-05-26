@@ -7,13 +7,15 @@ public enum Platform: Equatable {
     case Android
 }
 
+#if os(Android)
+
 @attached(extension,
           conformances: JObjectConvertible,
           names: named(toJavaObject), named(fromJavaObject))
 @attached(peer,
           names: suffixed(_class_init))
 @attached(member,
-          names: 
+          names:
             named(jobj),
             named(javaClass),
             named(deinit_jni_t),
@@ -29,12 +31,24 @@ public macro jvm() =
 public macro jvm_exported() =
   #externalMacro(module: "Swift4jMacros", type: "JvmExportedMacro")
 
-/*
-public macro jvm(_ platforms: Platform...,
-                 implements: String? = nil) =
-  #externalMacro(module: "SwiftJavaMacros", type: "JavaClassMacro")
-*/
-
 @attached(peer)
 public macro nonjvm() =
   #externalMacro(module: "Swift4jMacros", type: "NonjvmMacro")
+
+#else
+
+// Non-Android: stub macros. JVM bridging members aren't generated; iOS/macOS
+// consumers see the annotated types as plain Swift declarations.
+@attached(peer)
+public macro jvm() =
+  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+
+@attached(peer)
+public macro jvm_exported() =
+  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+
+@attached(peer)
+public macro nonjvm() =
+  #externalMacro(module: "Swift4jStubMacros", type: "NoOpPeerMacro")
+
+#endif
