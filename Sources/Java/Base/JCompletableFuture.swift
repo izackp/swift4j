@@ -27,7 +27,7 @@ struct JCompletableFuture {
   }
 }
 
-public func execWithFuture<T: JObjectConvertible & Sendable>(
+public func execWithFuture<T: JConvertible & Sendable>(
   _ cl: @Sendable @escaping () async throws -> T
 ) -> JavaObject {
   guard let javaObject = JCompletableFuture__class?.create() else {
