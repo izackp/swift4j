@@ -106,6 +106,7 @@ extension JvmTypeDeclSyntax {
 \(try expandJavaObjectDecls(in: context))
 \(try expandCtorDecls(in: context))
 \(expandFuncDecls(in: context))
+\(expandHashableDecls(in: context))
 """
 
 //\(expandVarDecls(in: context))
@@ -113,7 +114,27 @@ extension JvmTypeDeclSyntax {
     return ["\(raw: syntax)"]
   }
 
-
+  /// Synthesizes JNI thunks for `Object.equals`/`hashCode` when the type
+  /// conforms to `Hashable` on its main decl. Delegates to Swift's own
+  /// `==` / `hashValue` (which may be `@nonjvm`; we call them as ordinary
+  /// Swift members, not as bridged methods). `Int.hashValue` is truncated
+  /// into the 32-bit `jint` that Java's `hashCode()` contract requires.
+  func expandHashableDecls(in context: some MacroExpansionContext) -> String {
+    guard conformsToHashable else { return "" }
+    let selfExpr = self.selfExpr
+    let otherExpr = selfExpr.replacingOccurrences(of: "ptr", with: "otherPtr")
+    return
+"""
+fileprivate typealias hashCode_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaObject?, JavaLong) -> JavaInt
+fileprivate static let hashCode_jni: hashCode_jni_t = { _, _, ptr in
+  return JavaInt(truncatingIfNeeded: \(selfExpr).hashValue)
+}
+fileprivate typealias equals_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaObject?, JavaLong, JavaLong) -> JavaBoolean
+fileprivate static let equals_jni: equals_jni_t = { _, _, ptr, otherPtr in
+  return JavaBoolean((\(selfExpr) == \(otherExpr)) ? 1 : 0)
+}
+"""
+  }
 }
 
 
@@ -219,7 +240,14 @@ extension JvmTypeDeclSyntax {
 
     let deinitNatives = [ expandCreateNativeMethod(name: "deinit", sig: "(J)V", fn: "\(fqn).deinit_jni")]
 
-    return initNatives + deinitNatives + varNatives + funcNatives
+    // Synthesized Hashable bridge (see `expandHashableDecls`). Names match the
+    // private natives the Java `equals`/`hashCode` overrides bind to.
+    let hashableNatives: [String] = conformsToHashable ? [
+      expandCreateNativeMethod(name: "equalsImpl", sig: "(JJ)Z", fn: "\(fqn).equals_jni"),
+      expandCreateNativeMethod(name: "hashCodeImpl", sig: "(J)I", fn: "\(fqn).hashCode_jni"),
+    ] : []
+
+    return initNatives + deinitNatives + varNatives + funcNatives + hashableNatives
   }
 
   func expandRegisterNativesDefault(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax] = [], namespacePath: [String] = []) throws -> String {

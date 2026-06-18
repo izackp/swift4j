@@ -85,6 +85,29 @@ public extension TypeDeclSyntax {
   /// (cross-file/cross-module conformance is invisible to syntax inspection)
   /// — covers the common direct-conformance case used by `@jvm` error types.
   var conformsToError: Bool {
+    return inheritedTypeNames.contains { ["Error", "LocalizedError", "CustomNSError"].contains($0) }
+  }
+
+  /// True when the type's own inheritance clause syntactically names
+  /// `Hashable`. Like `conformsToError`, this only inspects the primary
+  /// declaration — a conformance added in a sibling `extension Foo: Hashable`
+  /// is invisible here. The macro (Swift JNI thunks) and the CLI (Java
+  /// proxy) both rely on this same check, so they must agree; that's only
+  /// possible when the conformance lives on the main decl. Declare
+  /// `: Hashable` on the type itself (the `==`/`hash(into:)` implementations
+  /// may still live in an extension).
+  ///
+  /// Enums are excluded: their Java proxy comes from `EnumGenerator`, not
+  /// `ClassGenerator`, so it wouldn't declare the `equals`/`hashCode` natives
+  /// the macro would register — `RegisterNatives` would then fail to bind.
+  /// Only `class`/`struct` (both → `ClassGenerator`) get the Hashable bridge.
+  var conformsToHashable: Bool {
+    return inheritedTypeNames.contains("Hashable") && !Syntax(self).is(EnumDeclSyntax.self)
+  }
+
+  /// Trimmed names from the type's own inheritance clause (empty for
+  /// extensions / unsupported decls).
+  private var inheritedTypeNames: [String] {
     let syntax = Syntax(self)
     let inheritanceClause: InheritanceClauseSyntax?
     if let cls = syntax.as(ClassDeclSyntax.self) {
@@ -96,12 +119,8 @@ public extension TypeDeclSyntax {
     } else {
       inheritanceClause = nil
     }
-    guard let clause = inheritanceClause else { return false }
-    let errorNames: Set<String> = ["Error", "LocalizedError", "CustomNSError"]
-    return clause.inheritedTypes.contains { entry in
-      let name = entry.type.trimmedDescription
-      return errorNames.contains(name)
-    }
+    guard let clause = inheritanceClause else { return [] }
+    return clause.inheritedTypes.map { $0.type.trimmedDescription }
   }
 }
 

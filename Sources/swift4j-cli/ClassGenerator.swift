@@ -97,6 +97,29 @@ extension ClassGenerator: TypeGeneratorProtocol {
       errorBridging = ""
     }
 
+    // When the Swift type conforms to `Hashable` (on its main decl), emit
+    // Object.equals/hashCode overrides delegating into the synthesized Swift
+    // thunks (see swift4j macro `expandHashableDecls`). Two bridged instances
+    // are equal iff Swift `==` says so; hashCode mirrors Swift `hashValue`.
+    let hashableBridging = typeDecl.conformsToHashable ?
+"""
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) return true;
+    if (!(o instanceof \(name))) return false;
+    return equalsImpl(_ptr(), ((\(name)) o)._ptr());
+  }
+
+  @Override
+  public int hashCode() {
+    return hashCodeImpl(_ptr());
+  }
+
+  private native boolean equalsImpl(long ptr, long otherPtr);
+  private native int hashCodeImpl(long ptr);
+""" : ""
+
     let source =
 """
 public \(nested ? "static" : "") class \(name)\(extendsClause) {
@@ -119,6 +142,7 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
     _ptr = ptr;
   }
 \(errorBridging)
+\(hashableBridging)
 \(ctors)
 
 \(varGens.map{$0.generate(with: &ctx)}.joined(separator: "\n\n"))
