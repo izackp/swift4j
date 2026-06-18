@@ -20,7 +20,8 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
   }
 
   override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-    if node.isExported && node.parentDecl?.isExported ?? true {
+    if node.isExported && node.parentDecl?.isExported ?? true
+       && node.isBridgeable(typeConformsToHashable: typeDecl.conformsToHashable) {
       methodGens.append(MethodGenerator(node, className: name))
     }
     return .skipChildren

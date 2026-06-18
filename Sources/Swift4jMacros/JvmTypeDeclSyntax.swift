@@ -202,6 +202,7 @@ public nonisolated static var javaClass: JClass { __JClass__.shared }
 
   func expandFuncDecls(in context: some MacroExpansionContext) -> String {
     return exportedDecls.funcDecls
+      .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
       .enumerated()
       .compactMap { i, decl in
         return context.executeAndWarnIfFails(at: decl) {
@@ -227,11 +228,13 @@ extension JvmTypeDeclSyntax {
       return bridgings.map { expandCreateNativeMethod(name: $0.javaName, sig: $0.sig, fn: "\(fqn).\($0.bridgeName)") }
     }
 
-    let funcNatives: [String] = exportedDecls.funcDecls.enumerated().compactMap {
-      guard let jniSig = try? $1.jniSignature() else { return nil }
-      let bridge = $1.bridgeName
-      return expandCreateNativeMethod(name: "\(bridge)Impl", sig: jniSig, fn: "\(fqn).\(bridge)_\($0)_jni")
-    }
+    let funcNatives: [String] = exportedDecls.funcDecls
+      .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
+      .enumerated().compactMap {
+        guard let jniSig = try? $1.jniSignature() else { return nil }
+        let bridge = $1.bridgeName
+        return expandCreateNativeMethod(name: "\(bridge)Impl", sig: jniSig, fn: "\(fqn).\(bridge)_\($0)_jni")
+      }
 
     let initNatives: [String] = exportedDecls.initDecls.enumerated().compactMap {
       guard let jniSig = try? $1.jniSignature() else { return nil }

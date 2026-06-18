@@ -52,6 +52,10 @@ extension IdentifierTypeSyntax: MappableTypeSyntax {
         ctx.imports.insert("io.scade.swift4j.Result")
         return "Result"
       }()
+      // Swift.Hasher bridges to the @jvm SwiftHasher wrapper (a reference-backed
+      // box around Swift.Hasher). The macro side resolves the JNI descriptor via
+      // `Hasher.javaName` at runtime; here we emit the Java proxy class name.
+      case "Hasher": "SwiftHasher"
 
       default: resolveExternal(name: name, with: &ctx) ?? name
     }
