@@ -80,7 +80,11 @@ class ProxyGenerator: SyntaxVisitor {
     for path in paths {
       let url = URL(fileURLWithPath: path)
       let source = try String(contentsOf: url, encoding: .utf8)
-      let sourceFile = Parser.parse(source: source)
+      let parsed = Parser.parse(source: source)
+      // Rewrite @jvmBinding(T.self) stubs into plain `@jvm T` before registry
+      // population and generation, so foreign-type bindings flow through the
+      // normal codegen path named after the foreign type.
+      let sourceFile = JvmBindingRewriter().rewrite(parsed).as(SourceFileSyntax.self) ?? parsed
       parsedFiles.append(sourceFile)
       RegistryPopulator(registry: settings.registry).walk(sourceFile)
     }
@@ -148,7 +152,8 @@ extension ProxyGenerator {
     for path in paths {
       let url = URL(fileURLWithPath: path)
       let source = try String(contentsOf: url, encoding: .utf8)
-      let sourceFile = Parser.parse(source: source)
+      let parsed = Parser.parse(source: source)
+      let sourceFile = JvmBindingRewriter().rewrite(parsed).as(SourceFileSyntax.self) ?? parsed
       ScanPopulator(registry: registry).walk(sourceFile)
     }
     registry.finalizeNamespaces()

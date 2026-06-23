@@ -31,6 +31,27 @@ public macro jvm() =
 public macro jvm_exported() =
   #externalMacro(module: "Swift4jMacros", type: "JvmExportedMacro")
 
+/// Generate a TYPED swift4j binding for a foreign (third-party / other-module)
+/// type WITHOUT editing its source. Attach to an `extension <Foreign>` in your
+/// own module that provides a manually-specified forwarding factory the macro
+/// reads to bind the initializer:
+///
+///     @jvmBinding
+///     extension SourceInfo {
+///         static func makeForJVM(instanceId: Int64, type: String) -> SourceInfo {
+///             SourceInfo(instanceId: instanceId, type: type)
+///         }
+///     }
+///
+/// You declare `: JObjectConvertible` on the extension and gate the whole thing
+/// `#if os(Android)` (the bridge witnesses are JNI-only). The macro injects the
+/// pointer-box witnesses, an `init0_jni` thunk calling the factory, and the
+/// `<Foreign>_class_init` register-natives entry. The CLI emits the typed Kotlin
+/// peer. See jvm_foreign_binding.md + JvmBindingMacro.
+@attached(member, names: arbitrary)
+public macro jvmBinding() =
+  #externalMacro(module: "Swift4jMacros", type: "JvmBindingMacro")
+
 @attached(peer)
 public macro nonjvm() =
   #externalMacro(module: "Swift4jMacros", type: "NonjvmMacro")
@@ -45,6 +66,10 @@ public macro jvm() =
 
 @attached(peer)
 public macro jvm_exported() =
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+
+@attached(peer)
+public macro jvmBinding() =
   #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 @attached(peer)

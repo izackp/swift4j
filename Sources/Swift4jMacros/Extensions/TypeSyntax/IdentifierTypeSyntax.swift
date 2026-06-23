@@ -38,7 +38,11 @@ extension IdentifierTypeSyntax: JvmMappedTypeSyntax {
     // raw array form "[B", not the class-wrapped "L[B;" the default
     // branch would emit.
     case "Data": "[B"
-      default: "L\\(\(description).javaName);" //"\\(\(name.text).javaSignature)"
+      // `trimmedDescription` (not `description`): a property like
+      // `var x: LcUUID //note` carries the trailing `//note` comment as type
+      // trivia, which would leak into the generated `L\(LcUUID //note.javaName);`
+      // → "unterminated string literal". Trimming strips leading/trailing trivia.
+      default: "L\\(\(trimmedDescription).javaName);"
     }
   }
 
