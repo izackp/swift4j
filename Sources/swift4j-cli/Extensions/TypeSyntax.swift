@@ -10,6 +10,7 @@ extension TypeSyntax {
     MemberTypeSyntax.self,
     FunctionTypeSyntax.self,
     ArrayTypeSyntax.self,
+    DictionaryTypeSyntax.self,
     AttributedTypeSyntax.self,
     OptionalTypeSyntax.self,
     TupleTypeSyntax.self

@@ -108,9 +108,23 @@ public enum \(name) {
 }
 
 
+// Kotlin hard keywords — illegal as bare identifiers, but legal when
+// backtick-escaped (`object`, `null`, ...). Enum case names map directly to
+// Kotlin nested class / object names, so any keyword case must be escaped.
+fileprivate let kotlinHardKeywords: Set<String> = [
+  "as", "break", "class", "continue", "do", "else", "false", "for", "fun",
+  "if", "in", "interface", "is", "null", "object", "package", "return",
+  "super", "this", "throw", "true", "try", "typealias", "typeof", "val",
+  "var", "when", "while"
+]
+
 fileprivate extension EnumCaseElementSyntax {
   var jvmName: String { name.text }
   var jvmExtCtorName: String { jvmName + "Impl" }
+  // Backtick-escaped name for use as a Kotlin identifier (class/object/type).
+  var kotlinName: String {
+    kotlinHardKeywords.contains(jvmName) ? "`\(jvmName)`" : jvmName
+  }
 
   func generateCaseExtCtor(with ctx: inout ProxyGenerator.Context) -> String {
     let paramDecls = ctx.with(language: .kotlin) { ctx in
@@ -128,7 +142,7 @@ fileprivate extension EnumCaseElementSyntax {
     if parameters.isEmpty {
       return
 """
-  object \(jvmName) : \(enumName)(SwiftPtr(\(jvmExtCtorName)()))
+  object \(kotlinName) : \(enumName)(SwiftPtr(\(jvmExtCtorName)()))
 """
     }
 
@@ -139,16 +153,16 @@ fileprivate extension EnumCaseElementSyntax {
 
     return
 """
-  class \(jvmName) internal constructor(ptr: SwiftPtr): \(enumName)(ptr) {
+  class \(kotlinName) internal constructor(ptr: SwiftPtr): \(enumName)(ptr) {
 \(parameters.map{$0.generateGetter(with: &ctx, for: jvmName)}.joined(separator: "\n\n"))
 
     constructor(\(paramDecls)): this(SwiftPtr(\(jvmExtCtorName)(\(params)), \(enumName)::deinit))
 
     private companion object {
       @JvmStatic
-      fun fromPtr(ptr: Long): \(jvmName) {
-        return \(jvmName)(SwiftPtr(ptr, \(enumName)::deinit))
-      }      
+      fun fromPtr(ptr: Long): \(kotlinName) {
+        return \(kotlinName)(SwiftPtr(ptr, \(enumName)::deinit))
+      }
     }
   }
 """
