@@ -22,10 +22,12 @@ extension IdentifierTypeSyntax: MappableTypeSyntax {
     switch name {
         // Primitives
       case "Bool": primitivesAsObjects ? "Boolean" : "boolean"
-      case "Int", "Int64": primitivesAsObjects ? "Long" : "long"
-      case "Int32": primitivesAsObjects ? "Integer" : "int"
-      case "Int16": primitivesAsObjects ? "Short" : "short"
-      case "Int8": primitivesAsObjects ? "Byte" : "byte"
+      // Unsigned types share the signed Java primitive (same JNI wire format);
+      // Unsigned+JConvertible range-checks on conversion. Mirrors the macro side.
+      case "Int", "Int64", "UInt", "UInt64": primitivesAsObjects ? "Long" : "long"
+      case "Int32", "UInt32": primitivesAsObjects ? "Integer" : "int"
+      case "Int16", "UInt16": primitivesAsObjects ? "Short" : "short"
+      case "Int8", "UInt8": primitivesAsObjects ? "Byte" : "byte"
       case "Float": primitivesAsObjects ? "Float" : "float"
       case "Double": primitivesAsObjects ? "Double" : "double"
 
