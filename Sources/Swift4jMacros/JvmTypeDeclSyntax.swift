@@ -15,7 +15,7 @@ protocol JvmTypeDeclSyntax: TypeDeclSyntax {
 
   func expandCtorDecls(in context: some MacroExpansionContext) throws -> String
 
-  func expandInitCall(params: String, throwing: Bool, initName: String) throws -> String
+  func expandInitCall(params: String, throwing: Bool, failable: Bool, initName: String) throws -> String
 
   func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> String
 

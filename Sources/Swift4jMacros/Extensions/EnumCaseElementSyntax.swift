@@ -27,7 +27,7 @@ extension EnumCaseElementSyntax {
     let mapping = try paramsMapping()
     
     let call = !parameters.isEmpty
-      ? try typeDecl.expandInitCall(params: mapping.mapped, throwing: false, initName: name)
+      ? try typeDecl.expandInitCall(params: mapping.mapped, throwing: false, failable: false, initName: name)
       :
 """
   struct Ptr {

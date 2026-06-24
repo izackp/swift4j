@@ -31,7 +31,15 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
 
 extension ClassGenerator: TypeGeneratorProtocol {
   func generate(with ctx: inout Context) -> TypeProxy {
-    let ctors = ctorGens.enumerated().map{$1.generate(with: &ctx, index: $0)}.joined(separator: "\n\n")
+    var failableCount = 0
+    let ctors = ctorGens.enumerated().map { (index, gen) -> String in
+      var failableOrdinal: Int? = nil
+      if gen.isFailable {
+        failableOrdinal = failableCount
+        failableCount += 1
+      }
+      return gen.generate(with: &ctx, index: index, failableOrdinal: failableOrdinal)
+    }.joined(separator: "\n\n")
 
     var class_init =
 """

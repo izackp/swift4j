@@ -22,7 +22,17 @@ extension JvmValueTypeDeclSyntax {
     return try expandCtorDeclsAsClass(in: context)
   }
 
-  func expandInitCall(params: String, throwing: Bool, initName: String) -> String {
+  func expandInitCall(params: String, throwing: Bool, failable: Bool, initName: String) -> String {
+    if failable {
+      return
+"""
+guard let value = \(throwing ? "try " : "").\(initName)(\(params)) else { return 0 }
+let ptr = UnsafeMutablePointer<\(name.text)>.allocate(capacity: 1)
+ptr.initialize(to: value)
+return JavaLong(Int(bitPattern: ptr))
+"""
+    }
+    return
 """
 let ptr = UnsafeMutablePointer<\(name.text)>.allocate(capacity: 1)
 ptr.initialize(to: \(throwing ? "try " : "").\(initName)(\(params)))

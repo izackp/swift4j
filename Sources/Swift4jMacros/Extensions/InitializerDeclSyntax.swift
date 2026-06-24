@@ -18,7 +18,7 @@ extension InitializerDeclSyntax {
 
     let mapping = try signature.paramsMapping()
 
-    var call = try typeDecl.expandInitCall(params: mapping.mapped, throwing: isThrowing, initName: "init")
+    var call = try typeDecl.expandInitCall(params: mapping.mapped, throwing: isThrowing, failable: isFailable, initName: "init")
     if isThrowing {
       call =
 """
