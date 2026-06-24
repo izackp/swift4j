@@ -26,7 +26,7 @@ extension JvmValueTypeDeclSyntax {
     if failable {
       return
 """
-guard let value = \(throwing ? "try " : "").\(initName)(\(params)) else { return 0 }
+guard let value: \(name.text) = \(throwing ? "try " : "").\(initName)(\(params)) else { return 0 }
 let ptr = UnsafeMutablePointer<\(name.text)>.allocate(capacity: 1)
 ptr.initialize(to: value)
 return JavaLong(Int(bitPattern: ptr))
