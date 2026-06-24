@@ -46,6 +46,21 @@ extension MemberTypeSyntax: MappableTypeSyntax {
 
     // Fallback: try external-package resolution against the bare type name
     // (same behaviour as IdentifierTypeSyntax for unknown identifiers).
+
+    // Foundation/Swift builtins referenced in qualified form (`Foundation.URL`,
+    // `Foundation.Date`, `Foundation.Data`) must map exactly like the bare
+    // identifier — including the Java import the bare path registers. Without
+    // this they fall through and emit e.g. `URL` with no `import java.net.URL`,
+    // producing uncompilable Java.
+    if namespaceName == "Foundation" || namespaceName == "Swift" {
+      switch typeName {
+      case "URL":  ctx.imports.insert("java.net.URL");   return "URL"
+      case "Date": ctx.imports.insert("java.util.Date"); return "Date"
+      case "Data": return "byte[]"
+      default: break
+      }
+    }
+
     return ctx.settings.externalPackages[typeName].map { _ in
       ctx.imports.insert("\(ctx.settings.externalPackages[typeName]!).\(typeName)")
       return typeName
