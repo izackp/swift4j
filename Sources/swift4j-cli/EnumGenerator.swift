@@ -50,7 +50,12 @@ sealed class \(name)(protected val ptr: SwiftPtr) {
 )
   }
 
-  private fun ptr(): Long {
+  // Must be named `_ptr` (not `ptr`): the Swift side resolves the native
+  // pointer via JObject.call(method: "_ptr") in `_self` (see JvmValueTypeDeclSyntax
+  // / ClassDeclSyntax). Pointer-backed classes already expose `_ptr()` from the
+  // class generator; associated-value enums used `ptr()` here, so fromJavaObject
+  // (Kotlin→Swift) crashed with NoSuchMethod "_ptr". Keep the names aligned.
+  private fun _ptr(): Long {
       return ptr.get()
   }
 
