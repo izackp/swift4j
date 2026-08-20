@@ -74,7 +74,9 @@ let package = Package(
                                   description: "Generate Java bridging proxies for the Swift classes"),
                   permissions: []),
                 dependencies: ["swift4j-cli"]
-               )
+               ),
+
+        .testTarget(name: "Swift4jTests")
     ]
 )
 

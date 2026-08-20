@@ -101,7 +101,9 @@ public func toJavaObject() -> JavaObject? {
 }
 fileprivate typealias deinit_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaClass?, JavaLong) -> Void
 fileprivate static let deinit_jni: deinit_jni_t = { _, _, ptr in
-  UnsafeMutablePointer<\(typeName)>(bitPattern: Int(ptr))?.deallocate()
+  guard let p = UnsafeMutablePointer<\(typeName)>(bitPattern: Int(ptr)) else { return }
+  p.deinitialize(count: 1)
+  p.deallocate()
 }
 """
   }
