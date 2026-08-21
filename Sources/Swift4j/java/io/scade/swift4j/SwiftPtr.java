@@ -96,8 +96,8 @@ public final class SwiftPtr implements AutoCloseable {
 
   private static final class Reaper {
 
-    private static final int MIN_STEP = 4096;
-    private static final int MAX_STEP = 262144;
+    private static final int MIN_STEP = 512;
+    private static final int MAX_STEP = 65536;
     private static final long MIN_GC_INTERVAL_NS = 2_000_000_000L;
     private static final long DRAIN_BUDGET_MS = 250L;
 
