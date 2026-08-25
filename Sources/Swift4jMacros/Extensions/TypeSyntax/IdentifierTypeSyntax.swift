@@ -95,10 +95,12 @@ extension IdentifierTypeSyntax: JvmMappedTypeSyntax {
     if isPrimitive && !primitivesAsObjects {
       switch name.text {
           case "Int":
-          return MappingRetType(mapped: "Int(\(expr))")
+          return MappingRetType(mapped: "Int.fromJavaLong(\(expr))")
         case "Bool":
           return MappingRetType(mapped: "(\(expr) == 1)")
-        case "UInt", "UInt64":
+        case "UInt":
+          return MappingRetType(mapped: "UInt.fromJavaLong(\(expr))")
+        case "UInt64":
           return MappingRetType(mapped: "UInt64.fromJavaLong(\(expr))")
         case "UInt32":
           return MappingRetType(mapped: "UInt32.fromJavaInt(\(expr))")

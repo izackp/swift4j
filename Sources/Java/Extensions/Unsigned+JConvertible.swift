@@ -43,7 +43,30 @@ public extension UInt {
   func toJavaLong() -> Int64 { return UInt64(self).toJavaLong() }
 
   @inline(__always)
-  static func fromJavaLong(_ v: Int64) -> UInt { return UInt(UInt64.fromJavaLong(v)) }
+  static func fromJavaLong(_ v: Int64) -> UInt {
+    let wide = UInt64.fromJavaLong(v)
+    guard let narrowed = UInt(exactly: wide) else {
+      _ = jni.ThrowNew(_illegalArgumentExceptionClass,
+                       "Java long \(v) does not fit in a \(UInt.bitWidth)-bit Swift UInt")
+      return 0
+    }
+    return narrowed
+  }
+}
+
+
+// MARK: - Int
+
+public extension Int {
+  @inline(__always)
+  static func fromJavaLong(_ v: Int64) -> Int {
+    guard let narrowed = Int(exactly: v) else {
+      _ = jni.ThrowNew(_illegalArgumentExceptionClass,
+                       "Java long \(v) does not fit in a \(Int.bitWidth)-bit Swift Int")
+      return 0
+    }
+    return narrowed
+  }
 }
 
 

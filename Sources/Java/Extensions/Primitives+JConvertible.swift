@@ -348,43 +348,32 @@ extension Int64: JPrimitiveConvertible {
 // MARK: - Int
 
 extension Int: JPrimitiveConvertible {
-#if arch(x86_64) || arch(arm64)
   public typealias PrimitiveType = JLong
   private typealias Convertible = Int64
   public static let javaSignature = "J"
-#else
-  public typealias PrimitiveType = JInteger
-  private typealias Convertible = Int32
-  public static let javaSignature = "I"
-#endif
-  
+
   public static func fromJavaObject(_ obj: JavaObject) -> Int {
-    return Int(Convertible.fromJavaObject(obj))
+    return Int.fromJavaLong(Convertible.fromJavaObject(obj))
   }
-  
+
   public static func fromMethod(_ method: JavaMethodID, on obj: JavaObject, args: [JavaParameter]) -> Int {
-    return Int(Convertible.fromMethod(method, on: obj, args: args))
+    return Int.fromJavaLong(Convertible.fromMethod(method, on: obj, args: args))
   }
-  
+
   public static func fromStaticMethod(_ method: JavaMethodID, on cls: JavaClass, args: [JavaParameter]) -> Int {
-    return Int(Convertible.fromStaticMethod(method, on: cls, args: args))
+    return Int.fromJavaLong(Convertible.fromStaticMethod(method, on: cls, args: args))
   }
-  
+
   public static func fromField(_ field: JavaFieldID, of obj: JavaObject) -> Int {
-    return Int(Convertible.fromField(field, of: obj))
+    return Int.fromJavaLong(Convertible.fromField(field, of: obj))
   }
-  
+
   public func toField(_ field: JavaFieldID, of obj: JavaObject) {
     Convertible(self).toField(field, of: obj)
   }
-  
+
   public static func fromStaticField(_ field: JavaFieldID, of cls: JavaClass) -> Int {
-#if arch(x86_64) || arch(arm64)
-    return Int(jni.GetStaticLongField(cls, field))
-#else
-    return Int(jni.GetStaticIntField(cls, field))
-#endif
-    //return Int(Convertible.fromStaticField(field, of: cls))
+    return Int.fromJavaLong(jni.GetStaticLongField(cls, field))
   }
   
   public func toStaticField(_ field: JavaFieldID, of cls: JavaClass) {
