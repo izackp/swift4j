@@ -68,13 +68,13 @@ fileprivate nonisolated static let deinit_jni: deinit_jni_t = { _, _, ptr in
       return
 """
 guard let obj = \(throwing ? "try ": "")\(name.text)(\(params)) else { return 0 }
-return unsafeBitCast(Unmanaged.passRetained(obj), to: JavaLong.self)
+return JavaLong(Int(bitPattern: Unmanaged.passRetained(obj).toOpaque()))
 """
     }
     return
 """
 let obj = \(throwing ? "try ": "")\(name.text)(\(params))
-return unsafeBitCast(Unmanaged.passRetained(obj), to: JavaLong.self)
+return JavaLong(Int(bitPattern: Unmanaged.passRetained(obj).toOpaque()))
 """
   }
 }

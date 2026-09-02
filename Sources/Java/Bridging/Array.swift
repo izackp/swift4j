@@ -62,7 +62,7 @@ extension SwiftArray: JObjectConvertible {
   
   public func toJavaObject() -> JavaObject? {
     if jobj == nil {
-      jobj = JObject(Self.javaClass.create(unsafeBitCast(Unmanaged.passRetained(self), to: JavaLong.self)), weak: true)
+      jobj = JObject(Self.javaClass.create(JavaLong(Int(bitPattern: Unmanaged.passRetained(self).toOpaque()))), weak: true)
     }
     return jobj?.ptr
   }
