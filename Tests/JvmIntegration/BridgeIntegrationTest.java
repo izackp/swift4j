@@ -2,6 +2,7 @@ import Swift4jFixtures.Box;
 import Swift4jFixtures.Leaf;
 import Swift4jFixtures.Branch;
 import Swift4jFixtures.Holder;
+import Swift4jFixtures.Lossy;
 
 import java.lang.reflect.Method;
 
@@ -26,6 +27,13 @@ public class BridgeIntegrationTest {
     copyIsIndependent();
     conversionBridgedPropertyHasNoPublicScope();
     classesHaveNoCopy();
+
+    // Known defects. These assert what the bridge does today, not what it
+    // should do. Green here includes real bugs.
+    pinnedPlainGetterLosesWrites();
+    pinnedMutatingMethodOnNestedValueIsDiscarded();
+    pinnedOptionalPropertyHasNoScope();
+    pinnedArrayElementWritesAreLost();
 
     if (failures > 0) {
       System.out.println(failures + " check(s) failed");
@@ -116,6 +124,78 @@ public class BridgeIntegrationTest {
       if (m.getName().equals("copy")) hasCopy = true;
     }
     check("class has no copy()", !hasCopy);
+  }
+
+  // ---------------------------------------------------------------------
+  // Pinned defects.
+  //
+  // Each of these asserts a silent write loss that the bridge still has. They
+  // pass because the bug is present. If one starts failing, the behaviour
+  // changed — check whether that was intended, then update or delete the pin.
+  // ---------------------------------------------------------------------
+
+  /**
+   * The plain getter boxes a copy, so a write through it lands in a malloc
+   * nothing reads again. This is the default path and the reason unsafeWith
+   * exists; it is not fixed, only avoidable.
+   */
+  private static void pinnedPlainGetterLosesWrites() {
+    Box box = new Box(new Leaf("orig", 1), "tag");
+
+    box.getLeaf().setLabel("lost");
+
+    check("PINNED: plain getter write is discarded",
+          box.getLeaf().getLabel().equals("orig"));
+  }
+
+  /**
+   * `mutating` is invisible to the bridge — it generates the same plain void as
+   * a read-only method. On a property box the mutation dies with the box, which
+   * is worse than a setter because nothing in the Java signature looks like a
+   * write.
+   */
+  private static void pinnedMutatingMethodOnNestedValueIsDiscarded() {
+    Box box = new Box(new Leaf("m", 5), "tag");
+
+    box.getLeaf().bump();
+    check("PINNED: mutating method on a nested value is discarded",
+          box.getLeaf().getCount() == 5);
+
+    // On an owned root it does persist, which is the inconsistency.
+    Leaf root = new Leaf("m", 5);
+    root.bump();
+    check("mutating method on an owned root persists", root.getCount() == 6);
+  }
+
+  /**
+   * Optional<T> is not laid out as T, so there is no address to hand out and
+   * the rule excludes it. Writes through the getter are therefore lost with no
+   * scoped alternative to reach for.
+   */
+  private static void pinnedOptionalPropertyHasNoScope() {
+    boolean scope = false;
+    for (Method m : Lossy.class.getMethods()) {
+      if (m.getName().equals("unsafeWithMaybe")) scope = true;
+    }
+    check("PINNED: optional property has no scoped borrow", !scope);
+
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] { new Leaf("e", 3) });
+    lossy.getMaybe().setLabel("lost");
+    check("PINNED: optional property write is discarded",
+          lossy.getMaybe().getLabel().equals("opt"));
+  }
+
+  /**
+   * Array marshalling boxes one owned copy per element, so an element write
+   * never reaches the array it came from. G3 in task.md; unresolved.
+   */
+  private static void pinnedArrayElementWritesAreLost() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), null, new Leaf[] { new Leaf("elem", 3) });
+
+    lossy.getLeaves()[0].setLabel("lost");
+
+    check("PINNED: array element write is discarded",
+          lossy.getLeaves()[0].getLabel().equals("elem"));
   }
 
   private static void check(String what, boolean ok) {

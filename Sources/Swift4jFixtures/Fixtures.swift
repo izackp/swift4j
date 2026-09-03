@@ -22,6 +22,13 @@ public struct Leaf {
     self.label = label
     self.count = count
   }
+
+  /// swift4j has no notion of `mutating`: this bridges to a plain `void`,
+  /// indistinguishable from a read-only method. Where the write lands depends
+  /// on how the receiver was obtained. Pinned in BridgeIntegrationTest.
+  public mutating func bump() {
+    count += 1
+  }
 }
 
 @jvm
@@ -89,6 +96,21 @@ public struct Box {
   public init(leaf: Leaf, tag: String) {
     self.leaf = leaf
     self.tag = tag
+  }
+}
+
+/// The shapes with no scoped borrow, so their writes go to a throwaway copy.
+/// Present to pin that loss, not because it is wanted.
+@jvm
+public struct Lossy {
+  public var leaf: Leaf
+  public var maybe: Leaf?
+  public var leaves: [Leaf]
+
+  public init(leaf: Leaf, maybe: Leaf?, leaves: [Leaf]) {
+    self.leaf = leaf
+    self.maybe = maybe
+    self.leaves = leaves
   }
 }
 

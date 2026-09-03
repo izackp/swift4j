@@ -499,6 +499,30 @@ live call sites.
 Nothing has been run on Android. Only `swift build` has been verified.
 
 
+## Pinned defects
+
+`Tests/JvmIntegration/BridgeIntegrationTest.java` asserts these silent losses
+so they cannot change unnoticed. **They pass because the bug is present.** A
+green run therefore includes four real defects.
+
+- **Plain getter writes are discarded.** `box.getLeaf().setLabel(x)` boxes a
+  copy and writes into it. The default path, and the reason `unsafeWith`
+  exists — avoidable, not fixed.
+- **`mutating` on a nested value is discarded.** `box.getLeaf().bump()` dies
+  with the box, while the identical call on an owned root persists. Nothing in
+  the Java signature distinguishes the two. Worse than a setter, which at least
+  reads as a write.
+- **Optional properties have no scoped borrow.** `Optional<T>` is not laid out
+  as `T`, so the rule excludes it and there is no scoped alternative to reach
+  for. Writes through the getter are lost.
+- **Array element writes are lost.** One owned box per element, so a write
+  never reaches the array it came from. G3, unresolved.
+
+Not pinned, because a test would be unsafe or unreliable: escaping the borrow
+out of `unsafeWith` (undefined behaviour by contract, which is what the
+`unsafe` prefix buys), and the concurrency exposure in G5.
+
+
 ## Sequence
 
 1. **D1.** Done.
