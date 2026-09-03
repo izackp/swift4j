@@ -78,6 +78,20 @@ public struct Branch {
   }
 }
 
+/// Small enough to construct from Java in one line, so the JVM integration
+/// test can exercise borrow-writes and copy independence without building a
+/// twelve-argument `Branch`.
+@jvm
+public struct Box {
+  public var leaf: Leaf
+  public var tag: String
+
+  public init(leaf: Leaf, tag: String) {
+    self.leaf = leaf
+    self.tag = tag
+  }
+}
+
 /// Classes take the reference path: no `copy_jni`, no `fromUnownedPtr`, and no
 /// JvmPointerBoxed conformance.
 @jvm

@@ -13,6 +13,11 @@ let package = Package(
 
         .executable(name: "swift4j-cli", targets: ["swift4j-cli"]),
 
+        // Test-only. Loaded by a host JVM in scripts/run-jvm-integration-tests.sh,
+        // which is the only place RegisterNatives and the borrow semantics
+        // actually run.
+        .library(name: "Swift4jFixtures", type: .dynamic, targets: ["Swift4jFixtures"]),
+
         .plugin(name: "swift4j-plugin", targets: ["swift4j-plugin"]),
         .plugin(name: "generate-java-bridging", targets: ["generate-java-bridging"])
     ],
