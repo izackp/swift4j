@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Lints commit messages. Install with scripts/install-git-hooks.sh
+set -uo pipefail
+
+MSG_FILE="$1"
+MAX_PROSE=280
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+# Strip comment lines and the verbose-diff section git may append.
+body=$(sed '/^# ------------------------ >8 /,$d' "$MSG_FILE" | grep -v '^#')
+
+# git-subrepo generates its own commit messages; leave them alone.
+grep -qi 'git subrepo' <<<"$body" && exit 0
+
+fail() {
+    echo "commit-msg: $1" >&2
+    FAILED=1
+}
+FAILED=0
+
+subject=$(grep -v '^[[:space:]]*$' <<<"$body" | head -1)
+
+has_version_bump=0
+grep -qiE 'version[[:space:]_-]*bump' <<<"$subject" && has_version_bump=1
+
+# The monorepo prefixes subjects with the project a commit touches, because
+# four apps share one tree. This repo is a single library, so a tag would only
+# ever name one of its own modules -- which the diff already says, and which
+# most commits span anyway since the macro and the CLI have to change together.
+tag_run=$(grep -oE '^(\[[^]]*\])+' <<<"$subject" || true)
+if [ -n "$tag_run" ]; then
+    fail "drop the '$tag_run' prefix; this repo is one project and does not tag subjects"
+fi
+
+if [ "$has_version_bump" -eq 1 ]; then
+    offenders=$(grep -oiE 'By:|Authored|Opus|Sonnet' <<<"$body" | sort -u | paste -sd' ' -)
+    if [ -n "$offenders" ]; then
+        fail "version bump commits take a subject line only; remove: $offenders"
+    fi
+fi
+
+if [ "$branch" = "fixes" ] || [ "$branch" = "main" ]; then
+    prose=""
+    bullet=""
+    while IFS= read -r line; do
+        if grep -qE '^[[:space:]]*([-*•]|[0-9]+[.)])[[:space:]]+' <<<"$line"; then
+            [ -n "$bullet" ] && bullets+=("$bullet")
+            bullet="${line}"
+        elif [ -n "$bullet" ] && grep -qE '^[[:space:]]+[^[:space:]]' <<<"$line"; then
+            bullet+=" ${line}"
+        else
+            [ -n "$bullet" ] && { bullets+=("$bullet"); bullet=""; }
+            prose+="${line}"$'\n'
+        fi
+    done <<<"$body"
+    [ -n "$bullet" ] && bullets+=("$bullet")
+
+    # The Automated-By footer is required elsewhere; don't count it as prose.
+    prose=$(grep -viE '^[[:space:]]*(automated-by|co-authored-by|signed-off-by):' <<<"$prose")
+    prose=$(sed -e 's/[[:space:]]*$//' <<<"$prose" | sed -e '/./,$!d')
+    prose_len=${#prose}
+
+    if [ "$prose_len" -ge "$MAX_PROSE" ]; then
+        fail "message is ${prose_len} chars, must be under ${MAX_PROSE}; move detail into a bulleted list"
+    fi
+
+    for item in "${bullets[@]:-}"; do
+        [ -z "$item" ] && continue
+        text=$(sed -E 's/^[[:space:]]*([-*•]|[0-9]+[.)])[[:space:]]+//' <<<"$item")
+        # Protect decimals, ellipses and URLs from the sentence split.
+        guarded=$(sed -E -e 's#https?://[^[:space:]]+#URL#g' \
+                         -e 's/([0-9])\.([0-9])/\1\2/g' \
+                         -e 's/\.\.\./…/g' <<<"$text")
+        count=$(grep -oE '[.!?]+([[:space:]]|$)' <<<"$guarded" | wc -l | tr -d ' ')
+        # Trailing punctuation is optional, so an unterminated tail is a sentence.
+        grep -qE '[.!?][[:space:]]*$' <<<"$guarded" || count=$((count + 1))
+        if [ "$count" -gt 2 ]; then
+            fail "bullet has ${count} sentences, max 2: ${text:0:60}..."
+        fi
+    done
+fi
+
+exit $FAILED
