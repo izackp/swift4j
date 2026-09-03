@@ -77,6 +77,17 @@ let package = Package(
                 dependencies: ["swift4j-cli"]
                ),
 
+        // Test-only. Declares the @jvm family without Swift4j's
+        // `#if os(Android)` gate, which a consumer's .define cannot lift.
+        .target(name: "Swift4jHostMacros",
+                dependencies: ["Java", "Swift4jMacros"]),
+
+        // Compiles the real @jvm expansions on the host. Nothing imports it;
+        // building it IS the test, and without it no emitted thunk is
+        // type-checked until an Android build runs.
+        .target(name: "Swift4jFixtures",
+                dependencies: ["Swift4jHostMacros"]),
+
         // Depends on both generators so the scoped-borrow rule can be checked
         // for agreement across them: they must emit identical native sets or
         // RegisterNatives unbinds the whole class.
