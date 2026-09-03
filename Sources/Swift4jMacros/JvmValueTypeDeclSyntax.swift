@@ -89,10 +89,22 @@ fileprivate static let deinit_jni: deinit_jni_t = { _, _, ptr in
 }
 """
 
+    let copyDecls =
+"""
+fileprivate typealias copy_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaObject?, JavaLong) -> JavaLong
+fileprivate static let copy_jni: copy_jni_t = { _, _, ptr in
+  guard let src = UnsafeMutablePointer<\(typeName)>(bitPattern: Int(truncatingIfNeeded: ptr)) else { return 0 }
+  let dst = UnsafeMutablePointer<\(typeName)>.allocate(capacity: 1)
+  dst.initialize(to: src.pointee)
+  return JavaLong(Int(bitPattern: dst))
+}
+"""
+
     return
 """
 \(initDecls)
 \(deinitDecls)
+\(copyDecls)
 """
   }
 }

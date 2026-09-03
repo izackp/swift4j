@@ -183,10 +183,31 @@ private enum __JClass__ {
     }
     return cls
   } ()
+  static let fromPtr: JavaMethodID = {
+    guard let mid = shared.getStaticMethodID(name: "fromPtr", sig: "(J)L\(fqn);") else {
+      fatalError("Could not find \(fqn).fromPtr")
+    }
+    return mid
+  } ()
+\(self is any JvmValueTypeDeclSyntax ? """
+  static let fromUnownedPtr: JavaMethodID = {
+    guard let mid = shared.getStaticMethodID(name: "fromUnownedPtr", sig: "(J)L\(fqn);") else {
+      fatalError("Could not find \(fqn).fromUnownedPtr")
+    }
+    return mid
+  } ()
+""" : "")
 }
 
 public nonisolated static var javaName: String { __JClass__.name }
 public nonisolated static var javaClass: JClass { __JClass__.shared }
+\(self is any JvmValueTypeDeclSyntax ? """
+public nonisolated static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer) -> JavaObject? {
+  return __JClass__.shared.callStaticObjectMethod(
+    method: __JClass__.fromUnownedPtr,
+    [Int(bitPattern: raw).toJavaParameter()])
+}
+""" : "")
 """
   }
 
@@ -243,6 +264,12 @@ extension JvmTypeDeclSyntax {
 
     let deinitNatives = [ expandCreateNativeMethod(name: "deinit", sig: "(J)V", fn: "\(fqn).deinit_jni")]
 
+    // Value types only: a class's Java peer already refers to one Swift object,
+    // so `copy()` there would mean something else entirely.
+    let copyNatives: [String] = self is any JvmValueTypeDeclSyntax
+      ? [expandCreateNativeMethod(name: "copyImpl", sig: "(J)J", fn: "\(fqn).copy_jni")]
+      : []
+
     // Synthesized Hashable bridge (see `expandHashableDecls`). Names match the
     // private natives the Java `equals`/`hashCode` overrides bind to.
     let hashableNatives: [String] = conformsToHashable ? [
@@ -250,7 +277,7 @@ extension JvmTypeDeclSyntax {
       expandCreateNativeMethod(name: "hashCodeImpl", sig: "(J)I", fn: "\(fqn).hashCode_jni"),
     ] : []
 
-    return initNatives + deinitNatives + varNatives + funcNatives + hashableNatives
+    return initNatives + deinitNatives + copyNatives + varNatives + funcNatives + hashableNatives
   }
 
   func expandRegisterNativesDefault(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax] = [], namespacePath: [String] = []) throws -> String {

@@ -126,9 +126,16 @@ extension JvmMacro: ExtensionMacro {
 
     try assert(context: context)
 
+    // Value types additionally carry JvmPointerBoxed, which is what lets a
+    // scoped borrow hand Java a peer around an address it does not own. A
+    // class's peer already refers to the object itself, and taking the address
+    // of a class-typed property would yield the address of the reference.
+    let isValueType = declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self)
+    let conformances = isValueType ? "JObjectConvertible, JvmPointerBoxed" : "JObjectConvertible"
+
     let extSyntax =
 """
-extension \(type.trimmed): JObjectConvertible { }
+extension \(type.trimmed): \(conformances) { }
 """
     return [try ExtensionDeclSyntax(SyntaxNodeString(stringLiteral: extSyntax))]
   }

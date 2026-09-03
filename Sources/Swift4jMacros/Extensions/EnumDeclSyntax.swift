@@ -32,6 +32,12 @@ private static let \(caseName)_javaClass: JClass = {
   }
   return cls
 }()
+private static let \(caseName)_fromPtr: JavaMethodID = {
+  guard let mid = \(caseName)_javaClass.getStaticMethodID(name: "fromPtr", sig: "(J)L\(caseClass);") else {
+    fatalError("Could not find \(caseClass).fromPtr")
+  }
+  return mid
+}()
 """
       }.joined(separator: "\n")
     }
@@ -82,16 +88,16 @@ private static let \(caseName)_javaClass: JClass = {
       if $0.parameters.isEmpty {
         return
 """
-case .\(caseName):  
+case .\(caseName):
   return \(caseJClass).getStatic(field: "INSTANCE", sig: "L\(caseFqn);")
 """
       } else {
         return
 """
-case .\(caseName):  
+case .\(caseName):
   let ptr = UnsafeMutablePointer<\(typeName)>.allocate(capacity: 1)
   ptr.initialize(to: self)
-  return \(caseJClass).callStaticObjectMethod(method: "fromPtr", sig: "(J)L\(caseFqn);", Int(bitPattern: ptr))   
+  return \(caseJClass).callStaticObjectMethod(method: Self.\(caseName)_fromPtr, [Int(bitPattern: ptr).toJavaParameter()])
 """
       }
     }.joined(separator: "\n")
@@ -151,9 +157,19 @@ switch self {
     let enumSig = fqn(from: context)
     let toJavaCases = cases().map{
 """
-case .\($0): return Self.javaClass.callStaticObjectMethod(method: "valueOf", sig: "(Ljava/lang/String;)L\(enumSig);", "\($0)")
+case .\($0): return Self.javaClass.callStaticObjectMethod(method: Self.__valueOf__, ["\($0)".toJavaParameter()])
 """
     }.joined(separator: "\n")
+
+    let valueOfDecl =
+"""
+private static let __valueOf__: JavaMethodID = {
+  guard let mid = javaClass.getStaticMethodID(name: "valueOf", sig: "(Ljava/lang/String;)L\(enumSig);") else {
+    fatalError("Could not find \(enumSig).valueOf")
+  }
+  return mid
+}()
+"""
 
     let fromJavaCases = cases().enumerated().map{
 """
@@ -163,6 +179,8 @@ case \($0.offset): return .\($0.element)
 
     return
 """
+\(valueOfDecl)
+
 public static func fromJavaObject(_ obj: JavaObject?) -> \(typeName) {
   let ordinal: Int32 = JObject(obj!).call(method: "ordinal")
   switch ordinal {

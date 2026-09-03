@@ -15,6 +15,34 @@ extension VariableDeclSyntax {
     ["_", "_"] + (isStatic ? [] : ["ptr"])
   }
 
+  /// Whether this property gets a scoped-borrow native (`unsafeWith<X>Impl`).
+  ///
+  /// Purely syntactic, because the macro cannot resolve what `Foo` names. The
+  /// same rule is duplicated in swift4j-cli's VarGenerator and the two MUST
+  /// agree: the CLI declares the native, the macro registers it, and
+  /// `RegisterNatives` fails the whole batch on any mismatch (R2).
+  ///
+  /// Deliberately over-broad. It admits types that bridge by conversion rather
+  /// than pointer-boxing (`Date`, `URL`), which the Swift side handles by
+  /// overload resolution on `JvmPointerBoxed` and the CLI handles by declaring
+  /// the native without exposing a public wrapper for it.
+  static func scopedBorrowable(_ varDecl: VarDecl, isStatic: Bool) -> Bool {
+    guard !isStatic, !varDecl.readonly, !varDecl.computed else { return false }
+
+    let name: String
+    if let ident = varDecl.type.as(IdentifierTypeSyntax.self) {
+      guard !ident.isPrimitive else { return false }
+      name = ident.name.text
+    } else if varDecl.type.is(MemberTypeSyntax.self) {
+      // Namespaced @jvm type, e.g. `Server.Subject`.
+      return true
+    } else {
+      // Optional, Array, Dictionary, function types: no single peer to borrow.
+      return false
+    }
+    return name != "String" && name != "Data"
+  }
+
   func bridgings(typeDecl: any JvmTypeDeclSyntax) throws -> [(javaName: String, bridgeName: String, sig: String)] {
     let _self = isStatic ? "" : "J"
 
@@ -25,6 +53,14 @@ extension VariableDeclSyntax {
         bridgeName: "\($0.name)_get_jni",
         sig: "(\(_self))\(jniType)"
       )]
+
+      if Self.scopedBorrowable($0, isStatic: isStatic) {
+        decls.append((
+          javaName: "unsafeWith\($0.capitalizedName)Impl",
+          bridgeName: "\($0.name)_with_jni",
+          sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
+        ))
+      }
 
       if !$0.readonly {
         decls.append((
@@ -50,6 +86,7 @@ extension VariableDeclSyntax {
     try decls.flatMap {
       [try makeBridgingGetter(for: $0, in: typeDecl)]
       + ($0.readonly ? [] : [try makeBridgingSetter(for: $0, in: typeDecl)])
+      + (Self.scopedBorrowable($0, isStatic: isStatic) ? [makeBridgingScopedBorrow(for: $0, in: typeDecl)] : [])
       + ($0.observable(self) && typeDecl.isObservable ? [try makeBridgingGetterWithObservationTracking(for: $0, in: typeDecl)] : [])
     }.joined(separator: "\n")
   }
@@ -105,6 +142,26 @@ return \(mapping.mapped)
                     closureParams: closureParams,
                     body: body,
                     isReturning: true)
+  }
+
+  //MARK: - Scoped borrow
+
+  /// Yields the property to a Java `SwiftBorrow` for the duration of the call.
+  ///
+  /// `withUnsafeMutablePointer(to:)` inside `_jvmScopedBorrow` is what makes
+  /// this sound where an escaping interior pointer would not be: the address is
+  /// only ever live inside the closure, which is exactly the JNI call. Swift's
+  /// own `_modify` has the same shape.
+  private func makeBridgingScopedBorrow(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) -> String {
+    let _self = typeDecl.selfExpr
+
+    return makeDecl("\(varDecl.name)_with_jni",
+                    in: typeDecl,
+                    paramTypes: defaultParamTypes + ["JavaObject?"],
+                    returnType: "Void",
+                    closureParams: defaultClosureParams + ["body"],
+                    body: "_jvmScopedBorrow(&\(_self).\(varDecl.name), body)",
+                    isReturning: false)
   }
 
   //MARK: - Getter + Observation

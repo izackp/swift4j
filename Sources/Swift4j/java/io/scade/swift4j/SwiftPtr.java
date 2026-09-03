@@ -7,48 +7,39 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
-public final class SwiftPtr implements AutoCloseable {
+/**
+ * A handle to Swift-owned storage. Immutable: the address it holds is valid for
+ * the handle's whole lifetime, and the storage is released by the reaper once
+ * this object becomes unreachable.
+ *
+ * There is deliberately no explicit release. Freeing on demand would let Java
+ * invalidate an address that a borrow may still be pointing into, and the
+ * resulting failure is a native use-after-free rather than an exception. GC
+ * reachability is the only lifetime rule.
+ */
+public final class SwiftPtr {
 
   @FunctionalInterface
   public interface DeinitFn {
     void deinit(long ptr);
   }
 
-  private volatile long ptr;
-  private final PhantomReference<Object> ref;
+  private final long ptr;
 
+  /** Non-owning handle: nothing here frees the address. */
   public SwiftPtr(long ptr) {
     this.ptr = ptr;
-    this.ref = null;
   }
 
   public SwiftPtr(long ptr, DeinitFn deinit) {
     this.ptr = ptr;
-    this.ref = deinit == null ? null : Reaper.register(this, ptr, deinit);
+    if (deinit != null) {
+      Reaper.register(this, ptr, deinit);
+    }
   }
 
   public long get() {
-    long p = ptr;
-    if (p == 0L && ref != null) {
-      throw new IllegalStateException("SwiftPtr has already been closed");
-    }
-    return p;
-  }
-
-  public boolean isClosed() {
-    return ref != null && ptr == 0L;
-  }
-
-  /**
-   * Releases the Swift object now rather than waiting for the garbage collector.
-   * Idempotent, and safe to race against the reaper. A SwiftPtr constructed
-   * without a DeinitFn does not own its pointer, so this is a no-op for it.
-   */
-  @Override
-  public void close() {
-    if (ref == null) return;
-    ptr = 0L;
-    Reaper.unregister(ref);
+    return ptr;
   }
 
   /** SwiftPtr instances that still own an unreleased Swift object. */
@@ -230,7 +221,7 @@ public final class SwiftPtr implements AutoCloseable {
       }
     }
 
-    static PhantomReference<Object> register(Object owner, long ptr, DeinitFn deinit) {
+    static void register(Object owner, long ptr, DeinitFn deinit) {
       PhantomReference<Object> ref = new PhantomReference<>(owner, QUEUE);
       REFS.put(ref, new Cleanup(ptr, deinit));
 
@@ -244,15 +235,6 @@ public final class SwiftPtr implements AutoCloseable {
         if (BACKPRESSURE_ENABLED && live >= BACKPRESSURE_LIMIT) {
           applyBackpressure();
         }
-      }
-      return ref;
-    }
-
-    static void unregister(PhantomReference<Object> ref) {
-      Cleanup cleanup = REFS.remove(ref);
-      ref.clear();
-      if (cleanup != null) {
-        cleanup.free();
       }
     }
   }

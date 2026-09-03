@@ -78,6 +78,12 @@ private enum __JClass__ {
     }
     return cls
   } ()
+  static let fromPtr: JavaMethodID = {
+    guard let mid = shared.getStaticMethodID(name: "fromPtr", sig: "(J)L\(fqn);") else {
+      fatalError("Could not find \(fqn).fromPtr")
+    }
+    return mid
+  } ()
 }
 public nonisolated static var javaName: String { __JClass__.name }
 public nonisolated static var javaClass: JClass { __JClass__.shared }
@@ -97,7 +103,7 @@ public static func fromJavaObject(_ obj: JavaObject?) -> Self {
 public func toJavaObject() -> JavaObject? {
   let ptr = UnsafeMutablePointer<\(typeName)>.allocate(capacity: 1)
   ptr.initialize(to: self)
-  return \(typeName).javaClass.callStaticObjectMethod(method: "fromPtr", sig: "(J)L\(fqn);", Int(bitPattern: ptr))
+  return \(typeName).javaClass.callStaticObjectMethod(method: __JClass__.fromPtr, [Int(bitPattern: ptr).toJavaParameter()])
 }
 fileprivate typealias deinit_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaClass?, JavaLong) -> Void
 fileprivate static let deinit_jni: deinit_jni_t = { _, _, ptr in

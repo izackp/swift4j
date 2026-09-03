@@ -10,7 +10,7 @@ public enum Platform: Equatable {
 #if os(Android)
 
 @attached(extension,
-          conformances: JObjectConvertible,
+          conformances: JObjectConvertible, JvmPointerBoxed,
           names: named(toJavaObject), named(fromJavaObject))
 @attached(peer,
           names: suffixed(_class_init))

@@ -14,7 +14,10 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
 
   override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported && node.parentDecl?.isExported ?? true {
-      varGens.append(VarGenerator(node, className: name, observationTracking: typeDecl.isObservable))
+      varGens.append(VarGenerator(node,
+                                  className: name,
+                                  observationTracking: typeDecl.isObservable,
+                                  registry: settings.registry))
     }
     return .skipChildren
   }
@@ -129,6 +132,29 @@ extension ClassGenerator: TypeGeneratorProtocol {
   private native int hashCodeImpl(long ptr);
 """ : ""
 
+    let valueTypeBridging = typeDecl is StructDeclSyntax ?
+"""
+
+  /**
+   * An independent owned copy. Edits to the result do not affect this instance,
+   * matching what `var x = y` does for the underlying Swift value type.
+   */
+  public \(name) copy() {
+    return fromPtr(copyImpl(_ptr()));
+  }
+
+  private native long copyImpl(long ptr);
+
+  /**
+   * Wraps an address owned by something else: no deinit is registered, so
+   * nothing here frees or copies the value. Valid only while the owner keeps
+   * the storage alive, which is what the unsafeWith* scopes bracket.
+   */
+  private static \(name) fromUnownedPtr(long ptr) {
+    return new \(name)(new SwiftPtr(ptr));
+  }
+""" : ""
+
     let source =
 """
 public \(nested ? "static" : "") class \(name)\(extendsClause) {
@@ -146,6 +172,7 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
   }
 
   private static native void deinit(long ptr);
+\(valueTypeBridging)
 
   private \(name)(SwiftPtr ptr) {
     _ptr = ptr;
