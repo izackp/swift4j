@@ -47,19 +47,23 @@ class VarGenerator {
   /// batch on a missing method (R2). Deliberately over-broad; see below.
   /// Must stay identical to `IdentifierTypeSyntax.isPrimitive` in the macro
   /// module, plus the two types whose peers are immutable Java values.
-  private static let nonBorrowableNames: Set<String> = [
+  static let nonBorrowableNames: Set<String> = [
     "Void", "Bool", "Int", "Int64", "Int32", "Int16", "Int8",
     "UInt", "UInt64", "UInt32", "UInt16", "UInt8",
     "Float", "Double", "String", "Data"
   ]
 
-  private func scopedBorrowable(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
-    guard !varDecl.isStatic, !decl.readonly, !decl.computed else { return false }
+  static func scopedBorrowable(_ decl: VariableDeclSyntax.VarDecl, isStatic: Bool) -> Bool {
+    guard !isStatic, !decl.readonly, !decl.computed else { return false }
 
     if let ident = decl.type.as(IdentifierTypeSyntax.self) {
-      return !Self.nonBorrowableNames.contains(ident.name.text)
+      return !nonBorrowableNames.contains(ident.name.text)
     }
     return decl.type.is(MemberTypeSyntax.self)
+  }
+
+  private func scopedBorrowable(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
+    return Self.scopedBorrowable(decl, isStatic: varDecl.isStatic)
   }
 
   /// Whether a *public* `unsafeWith<X>` wrapper is worth exposing — true only

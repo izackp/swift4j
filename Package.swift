@@ -53,7 +53,8 @@ let package = Package(
                 resources: [
                   .process("java/io/scade/swift4j/Result.java"),
                   .process("java/io/scade/swift4j/SwiftError.java"),
-                  .process("java/io/scade/swift4j/SwiftPtr.java")
+                  .process("java/io/scade/swift4j/SwiftPtr.java"),
+                  .process("java/io/scade/swift4j/SwiftBorrow.java")
                 ]),
 
         .executableTarget(name: "swift4j-cli",
@@ -76,7 +77,16 @@ let package = Package(
                 dependencies: ["swift4j-cli"]
                ),
 
-        .testTarget(name: "Swift4jTests")
+        // Depends on both generators so the scoped-borrow rule can be checked
+        // for agreement across them: they must emit identical native sets or
+        // RegisterNatives unbinds the whole class.
+        .testTarget(name: "Swift4jTests",
+                    dependencies: [
+                      "Swift4jMacros",
+                      "swift4j-cli",
+                      "SwiftSyntaxExtensions",
+                      .product(name: "SwiftParser", package: "swift-syntax")
+                    ])
     ]
 )
 
