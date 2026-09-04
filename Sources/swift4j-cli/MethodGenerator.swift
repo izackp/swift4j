@@ -54,7 +54,7 @@ class MethodGenerator {
 """
   }
 
-  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false, projectable: Bool = false) -> String {
     let params = funcDecl.signature.paramsMapping(with: &ctx)
 
     // Async funcs return CompletableFuture<T>. Java generics cannot use
@@ -88,10 +88,23 @@ class MethodGenerator {
                                    sealed: sealed,
                                    owner: "\(className).\(name)")
 
+    // A mutating method on a projection has to reach the owner too, or
+    // `box.getLeaf().bump()` would still write into something discarded.
+    let args = params.map { $0.name }.joined(separator: ", ")
+    let projected: String
+    if projectable && !funcDecl.isStatic {
+      let body = funcDecl.signature.returnClause != nil || funcDecl.isAsync
+        ? "      return _through(v -> v.\(name)(\(args)));\n"
+        : "      _through(v -> { v.\(name)(\(args)); return null; });\n      return;\n"
+      projected = "    if (_projected()) {\n\(body)    }\n"
+    } else {
+      projected = ""
+    }
+
     return
 """
   public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {
-\(guarded)
+\(projected)\(guarded)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(paramDeclsImpl.joined(separator: ", "))) \(throwsClause);
 """

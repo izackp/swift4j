@@ -136,6 +136,72 @@ extension ClassGenerator: TypeGeneratorProtocol {
   private native int hashCodeImpl(long ptr);
 """ : ""
 
+    // A projection owns no storage. It re-enters its owner for every operation,
+    // so `box.getLeaf().setLabel(x)` writes into `box` rather than into a copy
+    // that is discarded at the end of the expression.
+    //
+    // Only value types get this. A class peer already refers to one Swift
+    // object, so its getters already propagate.
+    let isValue = typeDecl is StructDeclSyntax
+    let projectionFields = isValue ?
+"""
+
+  private final io.scade.swift4j.SwiftScope _scope;
+
+  /**
+   * Held only to keep a materialised copy alive across a call into Swift. See
+   * {@link #_ptr()}: a projection has no stable address of its own, so passing
+   * one as a parameter has to produce a real box, and that box must outlive the
+   * JNI call that reads it.
+   */
+  private \(name) _materialised;
+""" : ""
+
+    let projectionPtr = isValue ?
+"""
+    if (_ptr == null) {
+      // Materialise a fresh copy. Fresh rather than cached, because the owner
+      // may have changed since the last call and a stale box would be worse
+      // than the copy this exists to avoid.
+      final \(name)[] copy = new \(name)[1];
+      _scope.open(raw -> copy[0] = ((\(name)) raw).copy());
+      _materialised = copy[0];
+      return _materialised._ptr.get();
+    }
+
+""" : ""
+
+    let projectionCtor = isValue ?
+"""
+
+  private \(name)(io.scade.swift4j.SwiftScope scope) {
+    _ptr = null;
+    _scope = scope;
+  }
+
+  /** Internal: builds a peer that reads and writes through {@code scope}. */
+  public static \(name) projection(io.scade.swift4j.SwiftScope scope) {
+    return new \(name)(scope);
+  }
+
+  private boolean _projected() {
+    return _ptr == null;
+  }
+
+  /**
+   * Runs {@code body} against a live view of whatever this projects, and
+   * returns what the body produced. Every projected operation goes through
+   * here, so each is its own scope and nothing holds a pointer between them.
+   */
+  private <R> R _through(java.util.function.Function<\(name), R> body) {
+    final Object[] result = new Object[1];
+    _scope.open(raw -> result[0] = body.apply((\(name)) raw));
+    @SuppressWarnings("unchecked")
+    R typed = (R) result[0];
+    return typed;
+  }
+""" : ""
+
     let valueTypeBridging = typeDecl is StructDeclSyntax ?
 """
 
@@ -219,9 +285,9 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
 \(class_init)
 
   private final SwiftPtr _ptr;
-\(hasScope ? "  private boolean _inScope;\n" : "")
+\(hasScope ? "  private boolean _inScope;\n" : "")\(projectionFields)
   private long _ptr() {
-    return _ptr.get();
+\(projectionPtr)    return _ptr.get();
   }
 
   private static \(name) fromPtr(long ptr) {
@@ -232,16 +298,16 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
 \(valueTypeBridging)
 
   private \(name)(SwiftPtr ptr) {
-    _ptr = ptr;
+    _ptr = ptr;\(isValue ? "\n    _scope = null;" : "")
   }
-\(errorBridging)
+\(projectionCtor)\(errorBridging)
 \(hashableBridging)
 \(borrowedClass)
 \(ctors)
 
-\(varGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
+\(varGens.map{$0.generate(with: &ctx, sealed: hasScope, projectable: isValue)}.joined(separator: "\n\n"))
 
-\(methodGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
+\(methodGens.map{$0.generate(with: &ctx, sealed: hasScope, projectable: isValue)}.joined(separator: "\n\n"))
 
 \(nestedTypeGens.compactMap {
     let proxy = $0.generate(with: &ctx)

@@ -173,10 +173,19 @@ final class GeneratedPeerTests: XCTestCase {
 
     // Per-access locking inside the scope would not be enough: the interior
     // pointer stays live across the callback, so the monitor has to span it.
+    // It now lives in the Raw helper, which is also what projections re-enter
+    // through, so both paths are guarded by construction.
     XCTAssertTrue(outer.contains(
-      "public void unsafeWithInner(io.scade.swift4j.SwiftBorrow<Inner.Borrowed> body) {\n"
+      "private void unsafeWithInnerRaw(io.scade.swift4j.SwiftBorrow body) {\n"
+      + "    if (_projected()) {\n"
+      + "      _through(v -> { v.unsafeWithInnerRaw(body); return null; });\n"
+      + "      return;\n"
+      + "    }\n"
       + "    synchronized (_ptr) {"),
       "the scope must hold the owner's monitor across the whole callback")
+
+    XCTAssertTrue(outer.contains("      unsafeWithInnerRaw(raw -> {"),
+                  "the public scope is built on the guarded helper")
 
     XCTAssertTrue(outer.contains("private boolean _inScope;"),
                   "nesting detection needs the flag on the owner")
@@ -190,8 +199,13 @@ final class GeneratedPeerTests: XCTestCase {
   func testAccessorsAreSealedWhileAScopeIsOpen() throws {
     let outer = try XCTUnwrap(generate()["Outer"])
 
+    // The projection branch comes first: a projected peer owns no storage, so
+    // there is no monitor of its own to take and nothing to seal.
     XCTAssertTrue(outer.contains(
       "public  long getCount() {\n"
+      + "    if (_projected()) {\n"
+      + "      return _through(v -> v.getCount());\n"
+      + "    }\n"
       + "    synchronized (_ptr) {\n"
       + "      if (_inScope) {"),
       "an ordinary read during a scope conflicts with the exclusive access the "
@@ -199,6 +213,10 @@ final class GeneratedPeerTests: XCTestCase {
 
     XCTAssertTrue(outer.contains(
       "public  void setCount(long value) {\n"
+      + "    if (_projected()) {\n"
+      + "      _through(v -> { v.setCount(value); return null; });\n"
+      + "      return;\n"
+      + "    }\n"
       + "    synchronized (_ptr) {\n"
       + "      if (_inScope) {"),
       "the same applies to writes")
@@ -220,6 +238,57 @@ final class GeneratedPeerTests: XCTestCase {
                   + "RegisterNatives unbinds every native on the class")
     XCTAssertFalse(outer.contains("public void unsafeForEachStamps("),
                    "Date elements have no interior pointer to hand out")
+  }
+
+  // MARK: - Projections
+
+  func testStructPropertyGetterReturnsAProjection() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains(
+      "public Inner getInner() {\n"
+      + "    return Inner.projection(this::unsafeWithInnerRaw);\n"
+      + "  }"),
+      "a @jvm struct property is handed back as a live view, so a write through "
+      + "it reaches the owner instead of a copy that is immediately discarded")
+
+    // Still declared: RegisterNatives needs it, and _ptr() uses the copying
+    // path to materialise a value when one is handed to Swift.
+    XCTAssertTrue(outer.contains("private  native Inner getInnerImpl(long ptr);"),
+                  "the copying native stays, even though the getter no longer calls it")
+  }
+
+  func testConversionBridgedAndPrimitiveGettersStillCopy() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertFalse(outer.contains("Date.projection"),
+                   "Date has no peer holding Swift storage to project through")
+    XCTAssertTrue(outer.contains("return this.getModifiedAtImpl(_ptr());"),
+                  "so it keeps the copying getter")
+  }
+
+  func testProjectionCarriesNoPointerOfItsOwn() throws {
+    let inner = try XCTUnwrap(generate()["Inner"])
+
+    XCTAssertTrue(inner.contains("public static Inner projection(io.scade.swift4j.SwiftScope scope)"))
+    XCTAssertTrue(inner.contains("private boolean _projected() {\n    return _ptr == null;\n  }"))
+
+    // Passing a projection to Swift has to produce a real box, and that box has
+    // to outlive the JNI call reading it — hence the field, not a local.
+    XCTAssertTrue(inner.contains("private Inner _materialised;"),
+                  "a materialised copy must be kept alive across the call")
+    XCTAssertTrue(inner.contains("_scope.open(raw -> copy[0] = ((Inner) raw).copy());"),
+                  "and it must be re-materialised per call, since the owner may have moved on")
+  }
+
+  func testClassPeersAreNeverProjected() throws {
+    let holder = try XCTUnwrap(generate()["Holder"])
+
+    // A class peer already refers to one Swift object, so its getters already
+    // propagate and there is nothing for a projection to add.
+    XCTAssertFalse(holder.contains("_projected()"))
+    XCTAssertFalse(holder.contains("projection("))
+    XCTAssertFalse(holder.contains("_materialised"))
   }
 
   func testTypesWithoutAScopeGetNoScopeFlag() throws {

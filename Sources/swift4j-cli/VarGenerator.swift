@@ -30,14 +30,14 @@ class VarGenerator {
     self.registry = registry
   }
 
-  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false, projectable: Bool = false) -> String {
     return varDecl.decls.map {
 """
-\(generateGetter(from: $0, with: &ctx, sealed: sealed))
-\($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed))
+\(generateGetter(from: $0, with: &ctx, sealed: sealed, projectable: projectable))
+\($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed, projectable: projectable))
 \($0.observable(varDecl) && observationTracking ? generateGetterWithObservationTracking(from: $0, with: &ctx) : "")
-\(generateScopedBorrow(from: $0, with: &ctx))
-\(generateScopedForEach(from: $0, with: &ctx))
+\(generateScopedBorrow(from: $0, with: &ctx, projectable: projectable))
+\(generateScopedForEach(from: $0, with: &ctx, projectable: projectable))
 """
     }.joined(separator: "\n")
   }
@@ -137,7 +137,7 @@ class VarGenerator {
     varDecl.decls.contains { exposesScopedBorrow($0) || exposesScopedForEach($0) }
   }
 
-  private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+  private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, projectable: Bool) -> String {
     guard scopedBorrowable(decl) else { return "" }
 
     let name = "unsafeWith\(decl.capitalizedName)"
@@ -167,7 +167,29 @@ class VarGenerator {
    * Java lock inside it can deadlock against a thread blocked on this peer.\(absentNote)
    */
   public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
-    synchronized (_ptr) {
+    final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+    try {
+      \(name)Raw(raw -> {
+        scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+        body.with(scope[0]);
+      });
+    } finally {
+      if (scope[0] != null) {
+        scope[0].invalidate();
+      }
+    }
+  }
+
+  /**
+   * The scope itself, yielding the untamed peer rather than a Borrowed view.
+   *
+   * <p>Projections re-enter through here, so it has to handle a projected
+   * receiver too: a projection of a projection opens its owner's scope and then
+   * this one inside it, which is what makes {@code a.getB().getC().setD(x)}
+   * reach all the way back to {@code a}.
+   */
+  private void \(name)Raw(io.scade.swift4j.SwiftBorrow body) {
+\(projectable ? "    if (_projected()) {\n      _through(v -> { v.\(name)Raw(body); return null; });\n      return;\n    }\n" : "")    synchronized (_ptr) {
       // Reentrant monitors would let a nested scope on this same peer succeed,
       // producing two live views of one storage. That is a caller bug, and a
       // deterministic one, so it is worth naming.
@@ -176,16 +198,9 @@ class VarGenerator {
           "\(className).\(name) is already in a scope on this instance");
       }
       _inScope = true;
-      final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
       try {
-        \(callee).\(name)Impl(_ptr(), raw -> {
-          scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
-          body.with(scope[0]);
-        });
+        \(callee).\(name)Impl(_ptr(), body);
       } finally {
-        if (scope[0] != null) {
-          scope[0].invalidate();
-        }
         _inScope = false;
       }
     }
@@ -195,7 +210,7 @@ class VarGenerator {
 """
   }
 
-  private func generateScopedForEach(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+  private func generateScopedForEach(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, projectable: Bool) -> String {
     guard scopedForEachable(decl) else { return "" }
 
     let name = "unsafeForEach\(decl.capitalizedName)"
@@ -270,7 +285,10 @@ class VarGenerator {
     }.joined(separator: "\n")
   }
 
-  private func generateGetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
+  private func generateGetter(from decl: VariableDeclSyntax.VarDecl,
+                              with ctx: inout Context,
+                              sealed: Bool,
+                              projectable: Bool) -> String {
     let name = "get\(decl.capitalizedName)"
     let retType = decl.type.map(with: &ctx)
 
@@ -286,6 +304,27 @@ class VarGenerator {
       implParamDecl = "long ptr"
     }
 
+    let nativeDecl = "  private \(modifiers) native \(retType) \(name)Impl(\(implParamDecl));"
+
+    // A property whose type is a @jvm struct is handed back as a projection
+    // rather than a copy, so a write through it reaches this instance. The
+    // native stays declared: RegisterNatives needs it, and _ptr() uses the
+    // copying path to materialise a value when one is passed to Swift.
+    if !varDecl.isStatic, !decl.type.is(OptionalTypeSyntax.self), exposesScopedBorrow(decl) {
+      return
+"""
+  /**
+   * A live view of this property, not a copy: writes through the result are
+   * writes into this instance, matching what {@code box.leaf.label = x} does in
+   * Swift when {@code box} is a reference.
+   */
+  public \(retType) \(name)() {
+    return \(retType).projection(this::unsafeWith\(decl.capitalizedName)Raw);
+  }
+\(nativeDecl)
+"""
+    }
+
     let call = PeerLock.guarded("return \(callee).\(name)Impl(\(implParam));",
                                 locked: !varDecl.isStatic,
                                 sealed: sealed,
@@ -294,13 +333,16 @@ class VarGenerator {
     return
 """
   public \(modifiers) \(retType) \(name)() {
-\(call)
+\(projectable && !varDecl.isStatic ? "    if (_projected()) {\n      return _through(v -> v.\(name)());\n    }\n" : "")\(call)
   }
-  private \(modifiers) native \(retType) \(name)Impl(\(implParamDecl));
+\(nativeDecl)
 """
   }
 
-  private func generateSetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
+  private func generateSetter(from decl: VariableDeclSyntax.VarDecl,
+                              with ctx: inout Context,
+                              sealed: Bool,
+                              projectable: Bool) -> String {
     let name = "set\(decl.capitalizedName)"
     let valType = decl.type.map(with: &ctx)
 
@@ -324,7 +366,7 @@ class VarGenerator {
     return
 """
   public \(modifiers) void \(name)(\(valType) value) {
-\(call)
+\(projectable && !varDecl.isStatic ? "    if (_projected()) {\n      _through(v -> { v.\(name)(value); return null; });\n      return;\n    }\n" : "")\(call)
   }
   private \(modifiers) native void \(name)Impl(\(implParamDecl));
 """
