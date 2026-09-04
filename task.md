@@ -1073,3 +1073,23 @@ the read path is still an argument from what the code does — no malloc, no
 copy, no Reaper registration — not a measurement. Reading several fields off
 one value is several crossings now, and whether that is a net win depends on
 CaptureAndroid's access pattern, which has not been checked either.
+
+### Correction: three operations were still materialising
+
+`equals`, `hashCode` and `copy()` all went through `_ptr()`, which meant they
+materialised — giving back most of the copy a projection exists to avoid.
+`copy()` was the worst of the three: materialise to get an address, then copy
+that address, so two copies to produce one.
+
+`hashCode` and `copy` now go through the scope and copy nothing. `equals`
+scopes the receiver and materialises only the argument.
+
+Scoping both sides would be one copy fewer, and it does not work.
+`box.getLeaf().equals(box.getLeaf())` is two projections of one owner, so the
+second entry hits the nesting guard — correctly, since that guard exists to stop
+two live views of one storage. For the same reason the argument has to be
+materialised *before* the receiver's scope opens rather than inside it.
+
+So: one copy for a comparison where either side is projected, none where
+neither is. `_ptr()` materialisation is now reached only by parameter passing,
+which is what it was for.
