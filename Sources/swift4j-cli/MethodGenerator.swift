@@ -12,6 +12,22 @@ class MethodGenerator {
 
   var name: String { funcDecl.name.text }
 
+  /// A closure parameter means Java code runs inside the native call, where it
+  /// can take JVM monitors and deadlock against a thread waiting on this
+  /// peer's. Those methods stay unguarded; see `PeerLock`.
+  private var takesClosure: Bool {
+    funcDecl.signature.parameterClause.parameters.contains { param in
+      var type = param.type
+      if let attributed = type.as(AttributedTypeSyntax.self) { type = attributed.baseType }
+      if let optional = type.as(OptionalTypeSyntax.self) { type = optional.wrappedType }
+      if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
+         let only = tuple.elements.first {
+        type = only.type
+      }
+      return type.is(FunctionTypeSyntax.self)
+    }
+  }
+
   init(_ funcDecl: FunctionDeclSyntax, className: String) {
     self.funcDecl = funcDecl
     self.className = className
@@ -67,10 +83,13 @@ class MethodGenerator {
     let throwsClause = funcDecl.isThrowing ? " throws Exception" : ""
 
 
+    let guarded = PeerLock.guarded("\(call);",
+                                   locked: !funcDecl.isStatic && !takesClosure)
+
     return
 """
-  public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {    
-    \(call);    
+  public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {
+\(guarded)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(paramDeclsImpl.joined(separator: ", "))) \(throwsClause);
 """

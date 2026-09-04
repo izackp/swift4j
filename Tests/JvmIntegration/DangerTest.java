@@ -23,14 +23,89 @@ public class DangerTest {
   public static void main(String[] args) throws Exception {
     System.loadLibrary("Swift4jFixtures");
 
-    String scenario = args.length > 0 ? args[0] : "race";
+    String scenario = args.length > 0 ? args[0] : "race-root";
     switch (scenario) {
+      case "race-root": rootAccessorRace(); break;
       case "race": crossThreadMutation(); break;
       case "escape": escapedBorrow(); break;
       default:
         System.out.println("unknown scenario: " + scenario);
         System.exit(2);
     }
+  }
+
+  /**
+   * The race that ordinary code hits, and the one D8 fixes.
+   *
+   * No borrowing, no nested struct, no unsafeWith: one shared peer, a plain
+   * setter on one thread and a plain getter on four others. `setTag` is
+   * release-then-store on a refcounted field and `getTag` is load-then-retain,
+   * so without a guard the release lands between the reader's two steps and
+   * the reader retains freed memory.
+   *
+   * The strings must exceed Swift's small-string capacity (15 UTF-8 bytes) or
+   * there is no hazard to test: a short String is stored inline in the struct,
+   * with no refcounted buffer to release. An earlier version of this scenario
+   * wrote "w0", "w1", ... and survived nine million unguarded iterations for
+   * exactly that reason.
+   *
+   * Unlike the scenarios below, this one is expected to SURVIVE. It is the
+   * before/after evidence for the peer lock: with the `synchronized (_ptr)`
+   * removed from the generated accessors this dies in swift_release within a
+   * second or two.
+   */
+  private static void rootAccessorRace() throws Exception {
+    final String PAD = "-------------------------------";  // pushes past 15 bytes
+    final Box box = new Box(new Leaf("start", 0), "tag" + PAD);
+    final AtomicBoolean stop = new AtomicBoolean(false);
+    final AtomicReference<Throwable> error = new AtomicReference<>();
+
+    Thread writer = new Thread(() -> {
+      long i = 0;
+      while (!stop.get()) {
+        try {
+          box.setTag("w" + (i++) + PAD);
+        } catch (Throwable t) {
+          error.compareAndSet(null, t);
+          return;
+        }
+      }
+      System.out.println("  writer completed " + i + " iterations");
+    }, "writer");
+
+    Thread[] readers = new Thread[4];
+    for (int r = 0; r < readers.length; r++) {
+      readers[r] = new Thread(() -> {
+        while (!stop.get()) {
+          try {
+            String s = box.getTag();
+            if (s == null || !s.endsWith(PAD)) {
+              error.compareAndSet(null, new IllegalStateException("read a torn tag: " + s));
+              return;
+            }
+          } catch (Throwable t) {
+            error.compareAndSet(null, t);
+            return;
+          }
+        }
+      }, "reader-" + r);
+    }
+
+    writer.start();
+    for (Thread t : readers) t.start();
+
+    Thread.sleep(3000);
+    stop.set(true);
+
+    writer.join(5000);
+    for (Thread t : readers) t.join(5000);
+
+    Throwable t = error.get();
+    if (t != null) {
+      System.out.println("  BROKEN: guarded accessors still raced: " + t);
+      System.exit(1);
+    }
+    System.out.println("  3s of guarded concurrent read/write, no fault");
   }
 
   /**
@@ -41,7 +116,14 @@ public class DangerTest {
    * zero and dealloc, and the reader then retains freed memory.
    *
    * Swift's defence is exclusivity enforcement; the bridge hands out a raw
-   * pointer and bypasses it. Nothing in the bridge serialises this.
+   * pointer and bypasses it.
+   *
+   * The peer lock does NOT cover this, deliberately. An unsafeWith scope holds
+   * an interior pointer into the owner for its whole duration, so excluding a
+   * concurrent writer would mean holding the lock across the callback — and
+   * arbitrary Java runs there, free to take JVM monitors and deadlock against
+   * a thread waiting on this one. The `unsafe` prefix is the contract: callers
+   * serialise their own scopes. So this is still expected to die.
    */
   private static void crossThreadMutation() throws Exception {
     final Box box = new Box(new Leaf("start", 0), "tag");

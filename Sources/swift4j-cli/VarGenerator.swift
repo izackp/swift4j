@@ -168,10 +168,13 @@ class VarGenerator {
       implParamDecl = "long ptr"
     }
 
+    let call = PeerLock.guarded("return \(callee).\(name)Impl(\(implParam));",
+                                locked: !varDecl.isStatic)
+
     return
 """
   public \(modifiers) \(retType) \(name)() {
-    return \(callee).\(name)Impl(\(implParam));
+\(call)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(implParamDecl));
 """
@@ -193,10 +196,13 @@ class VarGenerator {
       implParamDecl = "long ptr, \(valType) value"
     }
 
+    let call = PeerLock.guarded("\(callee).\(name)Impl(\(implParam));",
+                                locked: !varDecl.isStatic)
+
     return
 """
   public \(modifiers) void \(name)(\(valType) value) {
-    \(callee).\(name)Impl(\(implParam));
+\(call)
   }
   private \(modifiers) native void \(name)Impl(\(implParamDecl));
 """
@@ -206,10 +212,14 @@ class VarGenerator {
     let name = "get\(decl.capitalizedName)WithObservationTracking"
     let retType = decl.type.map(with: &ctx)
 
+    // `onChange` fires later, from the observation machinery, not inside this
+    // call — so guarding the read does not put user code under the monitor.
+    let call = PeerLock.guarded("return \(callee).\(name)Impl(_ptr(), onChange);", locked: true)
+
     return
 """
   public \(retType) \(name)(java.lang.Runnable onChange) {
-    return \(callee).\(name)Impl(_ptr(), onChange);
+\(call)
   }
   private native \(retType) \(name)Impl(long ptr, java.lang.Runnable onChange);
 """

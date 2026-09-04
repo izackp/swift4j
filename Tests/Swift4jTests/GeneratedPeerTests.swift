@@ -36,8 +36,11 @@ final class GeneratedPeerTests: XCTestCase {
 
   @jvm
   public class Holder {
+    public static var shared: String = "x"
     public var count: Int
     public init(count: Int) { self.count = count }
+    public func bump() {}
+    public func each(_ body: (Int) -> Void) {}
   }
   """
 
@@ -107,5 +110,56 @@ final class GeneratedPeerTests: XCTestCase {
     // mean something else entirely, and there is no inline storage to wrap.
     XCTAssertFalse(holder.contains("copy()"))
     XCTAssertFalse(holder.contains("fromUnownedPtr"))
+  }
+
+  // MARK: - D8: peer lock
+
+  func testInstanceAccessorsAreGuarded() throws {
+    let holder = try XCTUnwrap(generate()["Holder"])
+
+    XCTAssertTrue(holder.contains(
+      "public  long getCount() {\n"
+      + "    synchronized (_ptr) {\n"
+      + "      return this.getCountImpl(_ptr());\n"
+      + "    }\n"
+      + "  }"),
+      "an instance getter must serialise on the peer, or a concurrent setter's "
+      + "release can land between this read's load and its retain")
+
+    XCTAssertTrue(holder.contains("synchronized (_ptr) {\n      this.setCountImpl("),
+                  "an instance setter must serialise on the peer")
+    XCTAssertTrue(holder.contains("synchronized (_ptr) {\n      this.bumpImpl("),
+                  "a mutating method writes fields, so it needs the same guard")
+  }
+
+  func testStaticsAndClosureTakingMethodsAreNotGuarded() throws {
+    let holder = try XCTUnwrap(generate()["Holder"])
+
+    XCTAssertTrue(holder.contains(
+      "public static String getShared() {\n"
+      + "    return Holder.getSharedImpl();\n"
+      + "  }"),
+      "a static has no instance to lock on")
+
+    XCTAssertTrue(holder.contains(
+      "public  void each(Consumer<Long> body)  {\n"
+      + "    this.eachImpl(_ptr(), body);\n"
+      + "  }"),
+      "the closure runs inside the native call and can take JVM monitors; "
+      + "guarding it would let a Swift lock deadlock against a Java one")
+  }
+
+  func testBorrowedForwardingIsNotGuarded() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    // The scope holds an interior pointer into the owner for its whole
+    // duration, so per-access exclusion would not make it safe anyway — only
+    // holding the lock across the callback would, which is the deadlock.
+    let start = try XCTUnwrap(outer.range(of: "public static final class Borrowed"))
+    let end = try XCTUnwrap(outer.range(of: "public static Borrowed wrapBorrowed"))
+    let body = outer[start.lowerBound..<end.lowerBound]
+    XCTAssertFalse(body.contains("synchronized"),
+                   "unsafeWith is caller-serialised by contract; a guard here "
+                   + "would imply a safety it does not provide")
   }
 }

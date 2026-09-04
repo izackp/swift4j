@@ -90,7 +90,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
 
   @Override
   public String getMessage() {
-    return this.getDescriptionImpl(_ptr());
+\(PeerLock.guarded("return this.getDescriptionImpl(_ptr());", locked: true))
   }
 """
       } else if varNames.contains("errorDescription") {
@@ -99,7 +99,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
 
   @Override
   public String getMessage() {
-    return this.getErrorDescriptionImpl(_ptr());
+\(PeerLock.guarded("return this.getErrorDescriptionImpl(_ptr());", locked: true))
   }
 """
       } else {

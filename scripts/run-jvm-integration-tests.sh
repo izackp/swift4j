@@ -143,7 +143,14 @@ fi
 # died. A clean run is not proof of safety; these are probabilistic.
 echo
 echo "==> dangers"
-for scenario in race escape; do
+
+# race-root and escape are covered by the peer lock and the Borrowed guard, so
+# dying is a regression. race is the deliberately uncovered path -- holding the
+# lock across an unsafeWith callback would deadlock against JVM monitors -- so
+# its crash is reported without failing the run.
+known_unsafe=" race "
+
+for scenario in race-root escape race; do
     echo "  $scenario:"
     set +e
     # A crash here is expected, so keep the JVM's dump out of the repo root and
@@ -155,13 +162,25 @@ for scenario in race escape; do
         DangerTest "$scenario" 2>&1 | sed 's/^/  /'
     rc=${PIPESTATUS[0]}
     set -e
-    if [ "$rc" -gt 128 ]; then
-        echo "    CRASHED with signal $((rc - 128)) -- hazard demonstrated"
-        status=1
-    elif [ "$rc" != "0" ]; then
-        echo "    exited $rc -- hazard demonstrated"
-        status=1
+    if [ "$rc" = "0" ]; then
+        continue
     fi
+
+    if [ "$rc" -gt 128 ]; then
+        detail="CRASHED with signal $((rc - 128))"
+    else
+        detail="exited $rc"
+    fi
+
+    case "$known_unsafe" in
+        *" $scenario "*)
+            echo "    $detail -- known uncovered hazard, not a regression"
+            ;;
+        *)
+            echo "    $detail -- REGRESSION: this scenario is supposed to be safe"
+            status=1
+            ;;
+    esac
 done
 
 exit $status
