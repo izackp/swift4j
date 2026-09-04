@@ -30,13 +30,16 @@ class VarGenerator {
     self.registry = registry
   }
 
-  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
+  func generate(with ctx: inout Context,
+                sealed: Bool = false,
+                cacheSlots: [String: Int] = [:],
+                cacheable: Bool = false) -> String {
     return varDecl.decls.map {
 """
-\(generateGetter(from: $0, with: &ctx, sealed: sealed))
-\($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed))
+\(generateGetter(from: $0, with: &ctx, sealed: sealed, slot: cacheSlots[$0.name]))
+\($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed, slot: cacheSlots[$0.name], cacheable: cacheable))
 \($0.observable(varDecl) && observationTracking ? generateGetterWithObservationTracking(from: $0, with: &ctx) : "")
-\(generateScopedBorrow(from: $0, with: &ctx))
+\(generateScopedBorrow(from: $0, with: &ctx, slot: cacheSlots[$0.name]))
 \(generateScopedForEach(from: $0, with: &ctx))
 """
     }.joined(separator: "\n")
@@ -137,7 +140,28 @@ class VarGenerator {
     varDecl.decls.contains { exposesScopedBorrow($0) || exposesScopedForEach($0) }
   }
 
-  private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+  /// Properties worth caching: the ones whose getter marshals a Swift box.
+  ///
+  /// Class-typed properties are excluded because `JObjectRef` already hands
+  /// back one peer per Swift object, so there is nothing to save. Arrays are
+  /// excluded for now: caching one pins every element.
+  var cacheableNames: [String] {
+    guard !varDecl.isStatic else { return [] }
+    return varDecl.decls.filter { exposesScopedBorrow($0) }.map { $0.name }
+  }
+
+  /// The fields holding those cached peers. Nulled by the setter, by the scope
+  /// on exit, and by the child itself when written to.
+  func cacheFieldDecls(with ctx: inout Context) -> String {
+    guard !varDecl.isStatic else { return "" }
+    return varDecl.decls.filter { exposesScopedBorrow($0) }.map { decl in
+      "  private \(decl.type.map(with: &ctx)) _cache\(decl.capitalizedName);"
+    }.joined(separator: "\n")
+  }
+
+  private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl,
+                                    with ctx: inout Context,
+                                    slot: Int?) -> String {
     guard scopedBorrowable(decl) else { return "" }
 
     let name = "unsafeWith\(decl.capitalizedName)"
@@ -187,7 +211,7 @@ class VarGenerator {
           scope[0].invalidate();
         }
         _inScope = false;
-      }
+\(slot != nil ? "        // The callback may have written through the view.\n        _cache\(decl.capitalizedName) = null;\n" : "")      }
     }
   }
 
@@ -343,7 +367,10 @@ class VarGenerator {
     }.joined(separator: "\n")
   }
 
-  private func generateGetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
+  private func generateGetter(from decl: VariableDeclSyntax.VarDecl,
+                              with ctx: inout Context,
+                              sealed: Bool,
+                              slot: Int?) -> String {
     let name = "get\(decl.capitalizedName)"
     let retType = decl.type.map(with: &ctx)
 
@@ -359,10 +386,31 @@ class VarGenerator {
       implParamDecl = "long ptr"
     }
 
-    let call = PeerLock.guarded("return \(callee).\(name)Impl(\(implParam));",
-                                locked: !varDecl.isStatic,
-                                sealed: sealed,
-                                owner: "\(className).\(name)")
+    // Cached properties keep the marshalled peer, so a repeated read costs a
+    // field load instead of a malloc, a copy and a reaper registration. The
+    // child is told where it lives so its own writes can clear this entry.
+    let body: String
+    if let slot {
+      body =
+"""
+      if (_cache\(decl.capitalizedName) == null) {
+        \(retType) fresh = \(callee).\(name)Impl(\(implParam));
+        if (fresh == null) {
+          return null;
+        }
+        fresh._attachCache(this, \(slot));
+        _cache\(decl.capitalizedName) = fresh;
+      }
+      return _cache\(decl.capitalizedName);
+"""
+    } else {
+      body = "      return \(callee).\(name)Impl(\(implParam));"
+    }
+
+    let call = PeerLock.guardedBlock(body,
+                                     locked: !varDecl.isStatic,
+                                     sealed: sealed,
+                                     owner: "\(className).\(name)")
 
     return
 """
@@ -373,7 +421,11 @@ class VarGenerator {
 """
   }
 
-  private func generateSetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
+  private func generateSetter(from decl: VariableDeclSyntax.VarDecl,
+                              with ctx: inout Context,
+                              sealed: Bool,
+                              slot: Int?,
+                              cacheable: Bool) -> String {
     let name = "set\(decl.capitalizedName)"
     let valType = decl.type.map(with: &ctx)
 
@@ -389,15 +441,21 @@ class VarGenerator {
       implParamDecl = "long ptr, \(valType) value"
     }
 
-    let call = PeerLock.guarded("\(callee).\(name)Impl(\(implParam));",
-                                locked: !varDecl.isStatic,
-                                sealed: sealed,
-                                owner: "\(className).\(name)")
+    // Replacing the property makes any cached peer for it stale, and the write
+    // this peer makes into its own storage makes its parent's entry stale.
+    let body =
+      (slot != nil ? "      _cache\(decl.capitalizedName) = null;\n" : "")
+      + "      \(callee).\(name)Impl(\(implParam));"
+
+    let call = PeerLock.guardedBlock(body,
+                                     locked: !varDecl.isStatic,
+                                     sealed: sealed,
+                                     owner: "\(className).\(name)")
 
     return
 """
   public \(modifiers) void \(name)(\(valType) value) {
-\(call)
+\(!varDecl.isStatic && cacheable ? "    _detachCache();\n" : "")\(call)
   }
   private \(modifiers) native void \(name)Impl(\(implParamDecl));
 """

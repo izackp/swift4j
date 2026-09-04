@@ -38,6 +38,16 @@ extension ClassGenerator: TypeGeneratorProtocol {
     // can be re-entered while one is open.
     let hasScope = varGens.contains { $0.exposesAnyScopedBorrow }
 
+    // Caching is for value peers only. A class peer's object is owned by Swift
+    // and can be mutated with no bridge involvement, so there is no point at
+    // which its cache could be invalidated.
+    let isValue = typeDecl is StructDeclSyntax
+    let cacheNames = isValue ? varGens.flatMap { $0.cacheableNames } : []
+    var cacheSlots: [String: Int] = [:]
+    for (index, name) in cacheNames.enumerated() {
+      cacheSlots[name] = index
+    }
+
     var failableCount = 0
     let ctors = ctorGens.enumerated().map { (index, gen) -> String in
       var failableOrdinal: Int? = nil
@@ -83,6 +93,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
     //   - none → no override, inherit Throwable default (null)
     let isError = typeDecl.conformsToError
     let extendsClause = isError ? " extends Exception" : ""
+    let implementsClause = cacheNames.isEmpty ? "" : " implements io.scade.swift4j.SwiftCacheOwner"
     let varNames: Set<String> = isError
       ? Set(typeDecl.exportedDecls.varDecls.flatMap { $0.decls.map { $0.name } })
       : []
@@ -135,6 +146,50 @@ extension ClassGenerator: TypeGeneratorProtocol {
   private native boolean equalsImpl(long ptr, long otherPtr);
   private native int hashCodeImpl(long ptr);
 """ : ""
+
+    // The child half: a cached peer knows where it is held, so a write into it
+    // clears the entry rather than leaving a value Swift never saw to be read
+    // back as though the write had landed.
+    let cacheChild = isValue ?
+"""
+
+  private io.scade.swift4j.SwiftCacheOwner _cacheOwner;
+  private int _cacheSlot;
+
+  /** Internal: called by an owner when it caches this peer. */
+  public void _attachCache(io.scade.swift4j.SwiftCacheOwner owner, int slot) {
+    _cacheOwner = owner;
+    _cacheSlot = slot;
+  }
+
+  /**
+   * Drops this peer from whatever cached it. Called before any write, so a
+   * cache can only ever accelerate reads that agree with Swift.
+   */
+  private void _detachCache() {
+    io.scade.swift4j.SwiftCacheOwner owner = _cacheOwner;
+    if (owner != null) {
+      _cacheOwner = null;
+      owner._invalidateCacheSlot(_cacheSlot);
+    }
+  }
+""" : ""
+
+    let cacheFields = cacheNames.isEmpty ? "" :
+"""
+
+\(varGens.map { $0.cacheFieldDecls(with: &ctx) }.filter { !$0.isEmpty }.joined(separator: "\n"))
+
+  @Override
+  public void _invalidateCacheSlot(int slot) {
+    switch (slot) {
+\(cacheNames.enumerated().map { (index, name) in
+    "      case \(index): _cache\(name.prefix(1).uppercased())\(name.dropFirst()) = null; break;"
+  }.joined(separator: "\n"))
+      default: break;
+    }
+  }
+"""
 
     let valueTypeBridging = typeDecl is StructDeclSyntax ?
 """
@@ -214,7 +269,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
 
     let source =
 """
-public \(nested ? "static" : "") class \(name)\(extendsClause) {
+public \(nested ? "static" : "") class \(name)\(extendsClause)\(implementsClause) {
 
 \(class_init)
 
@@ -236,12 +291,13 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
   }
 \(errorBridging)
 \(hashableBridging)
+\(cacheChild)\(cacheFields)
 \(borrowedClass)
 \(ctors)
 
-\(varGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
+\(varGens.map{$0.generate(with: &ctx, sealed: hasScope, cacheSlots: cacheSlots, cacheable: isValue)}.joined(separator: "\n\n"))
 
-\(methodGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
+\(methodGens.map{$0.generate(with: &ctx, sealed: hasScope, cacheable: isValue)}.joined(separator: "\n\n"))
 
 \(nestedTypeGens.compactMap {
     let proxy = $0.generate(with: &ctx)

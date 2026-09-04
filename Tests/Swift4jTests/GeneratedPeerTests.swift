@@ -197,8 +197,11 @@ final class GeneratedPeerTests: XCTestCase {
       "an ordinary read during a scope conflicts with the exclusive access the "
       + "scope holds, and nothing in Swift catches it through a raw pointer")
 
+    // A write detaches from any cache holding this peer before it touches the
+    // monitor, so a cache can never report back a write Swift did not see.
     XCTAssertTrue(outer.contains(
       "public  void setCount(long value) {\n"
+      + "    _detachCache();\n"
       + "    synchronized (_ptr) {\n"
       + "      if (_inScope) {"),
       "the same applies to writes")
@@ -247,6 +250,55 @@ final class GeneratedPeerTests: XCTestCase {
                   "registered by the macro from syntax alone, so it must be declared")
     XCTAssertFalse(outer.contains("public Date getStampsAt("),
                    "a Date element has no interior pointer to copy out of")
+  }
+
+  // MARK: - Property cache
+
+  func testStructPropertiesAreCachedAndEveryWritePathInvalidates() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains("class Outer implements io.scade.swift4j.SwiftCacheOwner"))
+    XCTAssertTrue(outer.contains("private Inner _cacheInner;"))
+    XCTAssertTrue(outer.contains("fresh._attachCache(this, 0);"),
+                  "the cached child must know where it is held, so its own "
+                  + "writes can clear the entry")
+
+    // Every write path, because missing one turns a lost write into a write
+    // that the next read reports back while Swift never saw it.
+    XCTAssertTrue(outer.contains("      _cacheInner = null;\n      this.setInnerImpl("),
+                  "replacing the property drops its cached peer")
+    XCTAssertTrue(outer.contains("        _cacheInner = null;\n      }"),
+                  "a scope may have written through the view, so it drops on exit")
+    XCTAssertTrue(outer.contains("case 0: _cacheInner = null; break;"),
+                  "and the child can clear the entry from its own setters")
+  }
+
+  func testConversionBridgedAndPrimitivePropertiesAreNotCached() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertFalse(outer.contains("_cacheModifiedAt"),
+                   "Date bridges by conversion, so there is no peer to cache")
+    XCTAssertFalse(outer.contains("_cacheCount"),
+                   "a primitive never marshalled a box in the first place")
+  }
+
+  func testClassPeersGetNoCache() throws {
+    let holder = try XCTUnwrap(generate()["Holder"])
+
+    // Swift owns the object and can mutate it with no bridge involvement, so
+    // there is no point at which the cache could be invalidated.
+    XCTAssertFalse(holder.contains("SwiftCacheOwner"))
+    XCTAssertFalse(holder.contains("_detachCache"))
+    XCTAssertFalse(holder.contains("_attachCache"))
+  }
+
+  func testMutatingMethodsInvalidateToo() throws {
+    let inner = try XCTUnwrap(generate()["Inner"])
+
+    // Nothing in a Java signature says whether a method writes, so detaching is
+    // unconditional on value peers.
+    XCTAssertTrue(inner.contains("public void _attachCache("),
+                  "any value peer can be cached by an owner")
   }
 
   func testTypesWithoutAScopeGetNoScopeFlag() throws {

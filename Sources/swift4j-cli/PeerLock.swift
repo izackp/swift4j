@@ -50,7 +50,20 @@ enum PeerLock {
                       locked: Bool,
                       sealed: Bool = false,
                       owner: String = "") -> String {
-    guard locked else { return "    " + statement }
+    guardedBlock("      " + statement, locked: locked, sealed: sealed, owner: owner)
+  }
+
+  /// As `guarded`, for a body that is already indented and may be several
+  /// statements.
+  static func guardedBlock(_ body: String,
+                           locked: Bool,
+                           sealed: Bool = false,
+                           owner: String = "") -> String {
+    guard locked else {
+      return body.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.hasPrefix("      ") ? String($0.dropFirst(2)) : String($0) }
+        .joined(separator: "\n")
+    }
 
     let seal = sealed
       ? "      if (_inScope) {\n"
@@ -59,6 +72,6 @@ enum PeerLock {
         + "      }\n"
       : ""
 
-    return "    synchronized (_ptr) {\n" + seal + "      " + statement + "\n    }"
+    return "    synchronized (_ptr) {\n" + seal + body + "\n    }"
   }
 }

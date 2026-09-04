@@ -54,7 +54,7 @@ class MethodGenerator {
 """
   }
 
-  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false, cacheable: Bool = false) -> String {
     let params = funcDecl.signature.paramsMapping(with: &ctx)
 
     // Async funcs return CompletableFuture<T>. Java generics cannot use
@@ -88,10 +88,16 @@ class MethodGenerator {
                                    sealed: sealed,
                                    owner: "\(className).\(name)")
 
+    // A method may mutate, and nothing in the Java signature says whether it
+    // does. Detaching unconditionally is the conservative choice: a cache that
+    // survived a mutating call would report the write back on the next read
+    // while Swift never saw it.
+    let detach = cacheable && !funcDecl.isStatic ? "    _detachCache();\n" : ""
+
     return
 """
   public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {
-\(guarded)
+\(detach)\(guarded)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(paramDeclsImpl.joined(separator: ", "))) \(throwsClause);
 """

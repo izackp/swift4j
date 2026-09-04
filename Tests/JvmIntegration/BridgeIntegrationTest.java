@@ -74,6 +74,15 @@ public class BridgeIntegrationTest {
     indexedElementOutOfRangeThrows();
     arraySizeDoesNotMarshalTheArray();
 
+    section("property cache");
+    repeatedReadsMarshalOnce();
+    cacheIsPerInstance();
+    writeThroughCachedChildInvalidates();
+    mutatingMethodOnCachedChildInvalidates();
+    setterOnTheOwnerInvalidates();
+    scopeOnTheOwnerInvalidates();
+    classPeersAreNotCached();
+
     section("mutating methods");
     mutatingMethodOnARootPersists();
     mutatingMethodOnANestedValueShouldPersist();
@@ -221,6 +230,93 @@ public class BridgeIntegrationTest {
     duplicate.getHolder().setCount(42);
 
     check("copy shares the nested reference", original.getHolder().getCount() == 42);
+  }
+
+  // ---- property cache ----
+  //
+  // The cache is only ever a read accelerator, never a place a write can hide.
+  // Each of these covers one invalidation hook; miss any one and a write into a
+  // cached copy gets reported back by the next read while Swift never saw it —
+  // a lost write disguised as a successful one, which is worse than losing it.
+
+  private static void repeatedReadsMarshalOnce() {
+    Box box = new Box(new Leaf("cached", 1), "tag");
+    long before = SwiftPtr.totalRegistered();
+    for (int i = 0; i < 100; i++) {
+      box.getLeaf().getLabel();
+    }
+    long boxes = SwiftPtr.totalRegistered() - before;
+    check("100 reads of one property marshal once (" + boxes + ")", boxes == 1);
+  }
+
+  private static void cacheIsPerInstance() {
+    Box a = new Box(new Leaf("a", 1), "tag");
+    Box b = new Box(new Leaf("b", 2), "tag");
+    check("distinct owners cache distinctly",
+          "a".equals(a.getLeaf().getLabel()) && "b".equals(b.getLeaf().getLabel()));
+  }
+
+  /**
+   * The case that makes caching dangerous without invalidation. Writing into
+   * the cached copy must not make the next read report the write back.
+   */
+  private static void writeThroughCachedChildInvalidates() {
+    Box box = new Box(new Leaf("original", 1), "tag");
+    Leaf cached = box.getLeaf();
+    cached.setLabel("written-into-the-copy");
+
+    check("a write into a cached copy is not reported back by the owner",
+          "original".equals(box.getLeaf().getLabel()));
+    check("and the copy still holds what was written to it",
+          "written-into-the-copy".equals(cached.getLabel()));
+  }
+
+  /** Same, through a mutating method: nothing in the signature says it writes. */
+  private static void mutatingMethodOnCachedChildInvalidates() {
+    Box box = new Box(new Leaf("original", 5), "tag");
+    Leaf cached = box.getLeaf();
+    cached.bump();
+
+    check("a mutating call on a cached copy is not reported back by the owner",
+          box.getLeaf().getCount() == 5);
+  }
+
+  private static void setterOnTheOwnerInvalidates() {
+    Box box = new Box(new Leaf("first", 1), "tag");
+    check("first read", "first".equals(box.getLeaf().getLabel()));
+
+    box.setLeaf(new Leaf("second", 2));
+    check("a setter on the owner drops the cached child",
+          "second".equals(box.getLeaf().getLabel()));
+  }
+
+  private static void scopeOnTheOwnerInvalidates() {
+    Box box = new Box(new Leaf("before", 1), "tag");
+    check("first read", "before".equals(box.getLeaf().getLabel()));
+
+    box.unsafeWithLeaf(l -> l.setLabel("after"));
+    check("a scope on the owner drops the cached child",
+          "after".equals(box.getLeaf().getLabel()));
+  }
+
+  /**
+   * A class peer's object is owned by Swift and can be mutated with no bridge
+   * involvement, so there is no point at which a cache could be invalidated.
+   */
+  private static void classPeersAreNotCached() {
+    Mixed mixed = new Mixed(new Leaf("a", 1), new Holder(1, new Leaf("h", 2)));
+
+    // The first getHolder() registers the class peer itself, which JObjectRef
+    // then reuses. Take that outside the measurement so this counts only the
+    // struct reads.
+    mixed.getHolder();
+
+    long before = SwiftPtr.totalRegistered();
+    for (int i = 0; i < 10; i++) {
+      mixed.getHolder().getLeaf().getLabel();
+    }
+    long boxes = SwiftPtr.totalRegistered() - before;
+    check("a struct read off a class peer is not cached (" + boxes + ")", boxes == 10);
   }
 
   // ---- unsafeWith ----
