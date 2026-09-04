@@ -1,0 +1,35 @@
+// Android Lint checks for swift4j's generated peers.
+//
+// Not built by SwiftPM — this module exists to be consumed from an Android
+// build. Wire it into the app that uses the generated peers:
+//
+//     // settings.gradle
+//     includeBuild('path/to/swift4j') { ... }   or copy this module in
+//
+//     // app/build.gradle
+//     dependencies {
+//       lintChecks project(':lint-checks')
+//     }
+//
+// The detector reads annotations the generator emits, so nothing here needs to
+// know about swift4j's types.
+
+apply plugin: 'java-library'
+apply plugin: 'com.android.lint'
+
+java {
+  sourceCompatibility = JavaVersion.VERSION_17
+  targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+  compileOnly "com.android.tools.lint:lint-api:$lintVersion"
+  testImplementation "com.android.tools.lint:lint-tests:$lintVersion"
+  testImplementation 'junit:junit:4.13.2'
+}
+
+jar {
+  manifest {
+    attributes('Lint-Registry-v2': 'io.scade.swift4j.lint.Swift4jIssueRegistry')
+  }
+}
