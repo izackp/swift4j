@@ -982,3 +982,29 @@ Worth revisiting only if measurement shows the boxing on the read path is still
 the dominant cost after the current work, and if CaptureAndroid turns out to
 read getter results once and discard them rather than holding them as
 snapshots. That usage question has not been checked.
+
+### Sharpening why handles diverge
+
+Two objections were raised against handles and only one holds.
+
+The one that does not: "a struct coming from Swift would be mutated in place
+despite Swift thinking it is unchanged." It would not. Swift passes a struct by
+value, the bridge boxes a copy, and Java mutating that copy is exactly what
+Swift semantics prescribe — the caller's value is untouched either way. There
+is nothing lost here that Swift would not also lose.
+
+The one that does, stated properly: Swift yields a **copy on every struct
+property read**, whether the owner is a struct or a class.
+
+    var l = box.leaf    // a copy, always
+    l.label = "x"       // box is untouched
+
+A handle makes that read an alias. So handles would not be mirroring Swift
+semantics; they would be diverging from them at the exact point a caller is
+most likely to be reasoning in Swift terms. That divergence is uniform across
+class and struct roots, so it is not conditional on anything invisible — it is
+simply not what the language does.
+
+That is the real cost, and it is the same fact as the stale-snapshot example
+above, grounded properly: not "surprising to a Java developer" but "different
+from what Swift actually does".
