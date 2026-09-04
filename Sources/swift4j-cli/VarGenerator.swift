@@ -91,6 +91,12 @@ class VarGenerator {
     return false
   }
 
+  /// Whether any of this declaration's names gets a public `unsafeWith` — and
+  /// therefore whether the owning class needs the `_inScope` flag.
+  var exposesAnyScopedBorrow: Bool {
+    varDecl.decls.contains(where: exposesScopedBorrow)
+  }
+
   private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
     guard scopedBorrowable(decl) else { return "" }
 
@@ -110,17 +116,33 @@ class VarGenerator {
    * invalidated on the way out, so keeping it and using it later throws rather
    * than reading freed memory — but the pointer it wrapped is gone either way.
    * Use {@link #\(name.replacingOccurrences(of: "unsafeWith", with: "get"))()} for a value you can keep.
+   *
+   * <p>The scope holds this peer's monitor for its whole duration, since it
+   * hands out an interior pointer into this instance and a concurrent write
+   * would corrupt it. Keep {@code body} to small reads and writes: taking a
+   * Java lock inside it can deadlock against a thread blocked on this peer.
    */
   public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
-    final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
-    try {
-      \(callee).\(name)Impl(_ptr(), raw -> {
-        scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
-        body.with(scope[0]);
-      });
-    } finally {
-      if (scope[0] != null) {
-        scope[0].invalidate();
+    synchronized (_ptr) {
+      // Reentrant monitors would let a nested scope on this same peer succeed,
+      // producing two live views of one storage. That is a caller bug, and a
+      // deterministic one, so it is worth naming.
+      if (_inScope) {
+        throw new IllegalStateException(
+          "\(className).\(name) is already in a scope on this instance");
+      }
+      _inScope = true;
+      final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+      try {
+        \(callee).\(name)Impl(_ptr(), raw -> {
+          scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+          body.with(scope[0]);
+        });
+      } finally {
+        if (scope[0] != null) {
+          scope[0].invalidate();
+        }
+        _inScope = false;
       }
     }
   }

@@ -28,6 +28,7 @@ public class DangerTest {
       case "race-root": rootAccessorRace(); break;
       case "race": crossThreadMutation(); break;
       case "escape": escapedBorrow(); break;
+      case "nest": nestedScope(); break;
       default:
         System.out.println("unknown scenario: " + scenario);
         System.exit(2);
@@ -118,12 +119,11 @@ public class DangerTest {
    * Swift's defence is exclusivity enforcement; the bridge hands out a raw
    * pointer and bypasses it.
    *
-   * The peer lock does NOT cover this, deliberately. An unsafeWith scope holds
-   * an interior pointer into the owner for its whole duration, so excluding a
-   * concurrent writer would mean holding the lock across the callback — and
-   * arbitrary Java runs there, free to take JVM monitors and deadlock against
-   * a thread waiting on this one. The `unsafe` prefix is the contract: callers
-   * serialise their own scopes. So this is still expected to die.
+   * The scope holds the owner's monitor for its whole duration, so this is
+   * expected to survive. Per-access locking inside the scope would not have
+   * been enough: the interior pointer stays live across the callback, so a
+   * concurrent setLeaf corrupts it however the individual view reads are
+   * guarded.
    */
   private static void crossThreadMutation() throws Exception {
     final Box box = new Box(new Leaf("start", 0), "tag");
@@ -175,11 +175,42 @@ public class DangerTest {
 
     Throwable t = error.get();
     if (t != null) {
-      System.out.println("  DANGER observed: " + t);
+      System.out.println("  BROKEN: guarded scope still raced: " + t);
       System.exit(1);
     }
-    System.out.println("  survived 3s of concurrent read/write");
-    System.out.println("  (not proof of safety: the race window was simply not hit)");
+    System.out.println("  3s of concurrent scope-write and read, no fault");
+  }
+
+  /**
+   * A scope nested on the same peer, from one thread.
+   *
+   * Java monitors are reentrant, so the inner scope would otherwise be handed
+   * a second interior pointer into storage the outer scope is already holding
+   * — two live mutable views of one value. Unlike the races above this is
+   * deterministic caller error, which is why it throws rather than being left
+   * to chance.
+   *
+   * A scope on a *different* peer must still work, or the guard is too broad.
+   */
+  private static void nestedScope() {
+    Box box = new Box(new Leaf("a", 1), "tag");
+    Box other = new Box(new Leaf("b", 2), "tag");
+
+    try {
+      box.unsafeWithLeaf(outer -> box.unsafeWithLeaf(inner -> inner.setLabel("x")));
+      System.out.println("  BROKEN: nested scope on the same peer was allowed");
+      System.exit(1);
+    } catch (IllegalStateException expected) {
+      System.out.println("  nested scope rejected: " + expected.getMessage());
+    }
+
+    final String[] seen = new String[1];
+    box.unsafeWithLeaf(a -> other.unsafeWithLeaf(b -> seen[0] = a.getLabel() + b.getLabel()));
+    if (!"ab".equals(seen[0])) {
+      System.out.println("  BROKEN: scopes on distinct peers read \"" + seen[0] + "\"");
+      System.exit(1);
+    }
+    System.out.println("  scopes on distinct peers still nest: \"" + seen[0] + "\"");
   }
 
   /**

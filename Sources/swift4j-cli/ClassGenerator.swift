@@ -215,7 +215,7 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
 \(class_init)
 
   private final SwiftPtr _ptr;
-
+\(varGens.contains { $0.exposesAnyScopedBorrow } ? "  private boolean _inScope;\n" : "")
   private long _ptr() {
     return _ptr.get();
   }

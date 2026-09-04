@@ -12,12 +12,17 @@
 ///
 /// What it does NOT cover, deliberately:
 ///
-///   - `unsafeWith*` scopes. The scope holds an interior pointer into the
-///     owner for its whole duration, so exclusivity would have to span the
-///     callback — and arbitrary Java runs there, which can take JVM monitors
-///     and deadlock against a thread holding this one. The `unsafe` prefix is
-///     the contract: callers serialise their own scopes.
-///   - Methods taking a closure, for the same reason.
+///   - Methods taking a closure. Java code runs inside the native call, where
+///     it can take a JVM monitor and deadlock against a thread blocked here.
+///
+/// `unsafeWith*` scopes ARE guarded, in `VarGenerator`, but by holding the
+/// monitor across the callback rather than for one call — the scope hands out
+/// an interior pointer into the owner and a concurrent write corrupts it no
+/// matter how the individual view accesses are locked. That carries the same
+/// deadlock exposure as a closure-taking method, and is accepted only because
+/// a scope is contracted to small reads and writes. A blocking acquire was
+/// chosen over a try-lock because the cycle needs an ordinary getter to block,
+/// and a getter cannot be allowed to fail fast.
 ///   - `static` members. There is no instance, so there is no monitor.
 ///   - `equals` / `hashCode`. Locking two peers in argument order deadlocks
 ///     against the reversed call.

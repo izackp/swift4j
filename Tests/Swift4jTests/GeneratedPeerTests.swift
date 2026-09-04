@@ -152,14 +152,40 @@ final class GeneratedPeerTests: XCTestCase {
   func testBorrowedForwardingIsNotGuarded() throws {
     let outer = try XCTUnwrap(generate()["Outer"])
 
-    // The scope holds an interior pointer into the owner for its whole
-    // duration, so per-access exclusion would not make it safe anyway — only
-    // holding the lock across the callback would, which is the deadlock.
+    // The owner's scope already holds the monitor for the whole callback.
+    // Re-taking it per view access would be redundant, and locking the *view's*
+    // own peer instead would exclude nothing, since the storage belongs to the
+    // owner.
     let start = try XCTUnwrap(outer.range(of: "public static final class Borrowed"))
     let end = try XCTUnwrap(outer.range(of: "public static Borrowed wrapBorrowed"))
     let body = outer[start.lowerBound..<end.lowerBound]
     XCTAssertFalse(body.contains("synchronized"),
-                   "unsafeWith is caller-serialised by contract; a guard here "
-                   + "would imply a safety it does not provide")
+                   "the owner's scope holds the monitor; the view must not "
+                   + "take one of its own")
+  }
+
+  func testScopeHoldsTheMonitorAndRejectsNesting() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    // Per-access locking inside the scope would not be enough: the interior
+    // pointer stays live across the callback, so the monitor has to span it.
+    XCTAssertTrue(outer.contains(
+      "public void unsafeWithInner(io.scade.swift4j.SwiftBorrow<Inner.Borrowed> body) {\n"
+      + "    synchronized (_ptr) {"),
+      "the scope must hold the owner's monitor across the whole callback")
+
+    XCTAssertTrue(outer.contains("private boolean _inScope;"),
+                  "nesting detection needs the flag on the owner")
+    XCTAssertTrue(outer.contains("if (_inScope) {"),
+                  "monitors are reentrant, so a nested scope on the same peer "
+                  + "would otherwise hand out a second view of one storage")
+    XCTAssertTrue(outer.contains("_inScope = false;"),
+                  "the flag must clear on the way out, including on throw")
+  }
+
+  func testTypesWithoutAScopeGetNoScopeFlag() throws {
+    let inner = try XCTUnwrap(generate()["Inner"])
+    XCTAssertFalse(inner.contains("_inScope"),
+                   "Inner exposes no unsafeWith, so the flag would be dead weight")
   }
 }

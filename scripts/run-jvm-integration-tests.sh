@@ -144,13 +144,10 @@ fi
 echo
 echo "==> dangers"
 
-# race-root and escape are covered by the peer lock and the Borrowed guard, so
-# dying is a regression. race is the deliberately uncovered path -- holding the
-# lock across an unsafeWith callback would deadlock against JVM monitors -- so
-# its crash is reported without failing the run.
-known_unsafe=" race "
-
-for scenario in race-root escape race; do
+# All four are covered now -- the peer lock for plain accessors and for scopes,
+# the Borrowed guard for escapes, the _inScope flag for nesting -- so any of
+# them dying is a regression, not a demonstration.
+for scenario in race-root race escape nest; do
     echo "  $scenario:"
     set +e
     # A crash here is expected, so keep the JVM's dump out of the repo root and
@@ -167,20 +164,11 @@ for scenario in race-root escape race; do
     fi
 
     if [ "$rc" -gt 128 ]; then
-        detail="CRASHED with signal $((rc - 128))"
+        echo "    CRASHED with signal $((rc - 128)) -- REGRESSION"
     else
-        detail="exited $rc"
+        echo "    exited $rc -- REGRESSION"
     fi
-
-    case "$known_unsafe" in
-        *" $scenario "*)
-            echo "    $detail -- known uncovered hazard, not a regression"
-            ;;
-        *)
-            echo "    $detail -- REGRESSION: this scenario is supposed to be safe"
-            status=1
-            ;;
-    esac
+    status=1
 done
 
 exit $status
