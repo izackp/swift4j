@@ -155,6 +155,59 @@ extension ClassGenerator: TypeGeneratorProtocol {
   }
 """ : ""
 
+    // A distinct type for what unsafeWith hands out, so a borrow cannot be
+    // stored in a field of the owning type by accident — `Leaf x = it` does
+    // not compile, and declaring a `Leaf.Borrowed` field is a deliberate,
+    // greppable act. Deliberately NOT a subclass: that would be assignable to
+    // the base type and defeat the whole point.
+    //
+    // It forwards to a real peer rather than holding a pointer, so it needs no
+    // natives of its own and the registered set is unchanged. The validity flag
+    // lives here rather than in SwiftPtr, which keeps the check off `_ptr()`
+    // and therefore off the read hot path entirely.
+    let borrowedClass = typeDecl is StructDeclSyntax ?
+"""
+
+  /**
+   * A view of a {@link \(name)} that is only valid for the duration of the
+   * unsafeWith* call that produced it.
+   *
+   * <p>Using one after its scope ends throws instead of reading freed memory.
+   * That check is the difference between an IllegalStateException naming the
+   * offending line and a SIGSEGV inside swift_retain.
+   */
+  public static final class Borrowed {
+    private final \(name) _view;
+    private volatile boolean _valid = true;
+
+    private Borrowed(\(name) view) {
+      _view = view;
+    }
+
+    /** Internal: called by the owner on the way out of its unsafeWith scope. */
+    public void invalidate() {
+      _valid = false;
+    }
+
+    private \(name) view() {
+      if (!_valid) {
+        throw new IllegalStateException(
+          "\(name).Borrowed used outside the unsafeWith scope that created it");
+      }
+      return _view;
+    }
+
+\(varGens.map { $0.generateForwarding(with: &ctx) }.filter { !$0.isEmpty }.joined(separator: "\n"))
+
+\(methodGens.compactMap { $0.generateForwarding(with: &ctx) }.joined(separator: "\n"))
+  }
+
+  /** Internal: wraps a scoped view. Called by the owner's unsafeWith wrapper. */
+  public static Borrowed wrapBorrowed(\(name) view) {
+    return new Borrowed(view);
+  }
+""" : ""
+
     let source =
 """
 public \(nested ? "static" : "") class \(name)\(extendsClause) {
@@ -179,6 +232,7 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
   }
 \(errorBridging)
 \(hashableBridging)
+\(borrowedClass)
 \(ctors)
 
 \(varGens.map{$0.generate(with: &ctx)}.joined(separator: "\n\n"))

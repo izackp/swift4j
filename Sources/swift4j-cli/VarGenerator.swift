@@ -106,16 +106,50 @@ class VarGenerator {
    * Runs {@code body} against a view of this property, in place: no copy is
    * made and writes through the view are writes into this instance.
    *
-   * <p>Unsafe because the view is only valid until {@code body} returns.
-   * Storing it, or using it after the call, reads memory that may have been
-   * freed or reused. Use {@link #\(name.replacingOccurrences(of: "unsafeWith", with: "get"))()} for a value you can keep.
+   * <p>Unsafe because the view is only valid until {@code body} returns. It is
+   * invalidated on the way out, so keeping it and using it later throws rather
+   * than reading freed memory — but the pointer it wrapped is gone either way.
+   * Use {@link #\(name.replacingOccurrences(of: "unsafeWith", with: "get"))()} for a value you can keep.
    */
-  public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType)> body) {
-    \(callee).\(name)Impl(_ptr(), body);
+  public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
+    final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+    try {
+      \(callee).\(name)Impl(_ptr(), raw -> {
+        scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+        body.with(scope[0]);
+      });
+    } finally {
+      if (scope[0] != null) {
+        scope[0].invalidate();
+      }
+    }
   }
 
 \(nativeDecl)
 """
+  }
+
+  /// Forwarding accessors for the nested `Borrowed` view. Statics are skipped:
+  /// a borrow is of an instance.
+  func generateForwarding(with ctx: inout Context) -> String {
+    guard !varDecl.isStatic else { return "" }
+
+    return varDecl.decls.map { decl -> String in
+      let type = decl.type.map(with: &ctx)
+      let getter =
+"""
+    public \(type) get\(decl.capitalizedName)() {
+      return view().get\(decl.capitalizedName)();
+    }
+"""
+      guard !decl.readonly else { return getter }
+      return getter + "\n" +
+"""
+    public void set\(decl.capitalizedName)(\(type) value) {
+      view().set\(decl.capitalizedName)(value);
+    }
+"""
+    }.joined(separator: "\n")
   }
 
   private func generateGetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {

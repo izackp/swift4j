@@ -17,6 +17,27 @@ class MethodGenerator {
     self.className = className
   }
 
+  /// Forwarding declaration for the nested `Borrowed` view, which holds a
+  /// checked reference rather than a pointer of its own. Static and async
+  /// members are skipped: neither is reached through a borrow.
+  func generateForwarding(with ctx: inout Context) -> String? {
+    guard !funcDecl.isStatic, !funcDecl.isAsync else { return nil }
+
+    let params = funcDecl.signature.paramsMapping(with: &ctx)
+    let retType = funcDecl.signature.returnClause?.type.map(with: &ctx) ?? "void"
+    let paramDecls = params.map { "\($0.type) \($0.name)" }
+    let args = params.map { $0.name }.joined(separator: ", ")
+    let ret = funcDecl.signature.returnClause != nil ? "return " : ""
+    let throwsClause = funcDecl.isThrowing ? " throws Exception" : ""
+
+    return
+"""
+    public \(retType) \(name)(\(paramDecls.joined(separator: ", ")))\(throwsClause) {
+      \(ret)view().\(name)(\(args));
+    }
+"""
+  }
+
   func generate(with ctx: inout Context) -> String {
     let params = funcDecl.signature.paramsMapping(with: &ctx)
 

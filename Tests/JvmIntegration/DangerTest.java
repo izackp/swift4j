@@ -111,52 +111,61 @@ public class DangerTest {
    * dangling" — the second step drops the owner and collects it.
    */
   private static void escapedBorrow() throws Exception {
-    final AtomicReference<Leaf> escaped = new AtomicReference<>();
+    // Storing the view at all now takes a deliberate declaration. The lambda
+    // parameter is Leaf.Borrowed, not Leaf, so the accidental version —
+    //
+    //     AtomicReference<Leaf> escaped = ...;
+    //     box.unsafeWithLeaf(l -> escaped.set(l));
+    //
+    // does not compile. That is the first line of defence, and it is why this
+    // test has to opt in to the danger explicitly.
+    final AtomicReference<Leaf.Borrowed> escaped = new AtomicReference<>();
 
     Box box = new Box(new Leaf("owned", 7), "tag");
-    box.unsafeWithLeaf(l -> escaped.set(l));
 
-    // Owner still reachable: the address is still valid, so this reads fine.
-    String whileOwnerAlive;
+    String insideScope = readInside(box, escaped);
+    if (!"owned".equals(insideScope)) {
+      System.out.println("  DANGER: view read \"" + insideScope + "\" inside its own scope");
+      System.exit(1);
+    }
+    System.out.println("  view readable inside its scope: \"" + insideScope + "\"");
+
+    // Second line of defence: the view is invalidated on the way out, so this
+    // throws instead of dereferencing a pointer whose owner may already be
+    // gone. Before this existed the same call died with SIGSEGV in
+    // swift_retain once the owner was collected.
     try {
-      whileOwnerAlive = escaped.get().getLabel();
-    } catch (Throwable t) {
-      System.out.println("  DANGER observed while owner alive: " + t);
+      escaped.get().getLabel();
+      System.out.println("  DANGER: escaped view still readable after its scope ended");
       System.exit(1);
-      return;
-    }
-    System.out.println("  escaped borrow readable while owner alive: "
-                       + "\"" + whileOwnerAlive + "\"");
-    if (!"owned".equals(whileOwnerAlive)) {
-      System.out.println("  DANGER observed: escaped borrow read the wrong value");
-      System.exit(1);
+    } catch (IllegalStateException expected) {
+      System.out.println("  escaped view threw on use after scope: " + expected.getMessage());
     }
 
-    // Drop the owner and collect. The malloc it owned is freed by the reaper,
-    // leaving the escaped view pointing into released memory.
+    // And still throws once the owner is gone, rather than reading freed memory.
     box = null;
     for (int i = 0; i < 5; i++) {
       System.gc();
       Thread.sleep(100);
     }
 
-    String afterOwnerGone;
     try {
-      afterOwnerGone = escaped.get().getLabel();
-    } catch (Throwable t) {
-      System.out.println("  DANGER observed after owner collected: " + t);
+      escaped.get().getLabel();
+      System.out.println("  DANGER: escaped view readable after the owner was collected");
       System.exit(1);
-      return;
+    } catch (IllegalStateException expected) {
+      System.out.println("  escaped view still throws after the owner was collected");
     }
 
-    if ("owned".equals(afterOwnerGone)) {
-      System.out.println("  escaped borrow still read \"" + afterOwnerGone + "\""
-                         + " after the owner was collected");
-      System.out.println("  (the allocation was not reused yet; still a use-after-free)");
-    } else {
-      System.out.println("  DANGER observed: escaped borrow read \"" + afterOwnerGone
-                         + "\" after the owner was collected");
-      System.exit(1);
-    }
+    System.out.println("  escape hazard contained");
+  }
+
+  private static String readInside(Box box, AtomicReference<Leaf.Borrowed> escaped) {
+    final String[] seen = new String[1];
+    box.unsafeWithLeaf(l -> {
+      escaped.set(l);
+      seen[0] = l.getLabel();
+    });
+    return seen[0];
   }
 }

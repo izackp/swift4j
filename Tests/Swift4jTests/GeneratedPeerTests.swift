@@ -61,10 +61,18 @@ final class GeneratedPeerTests: XCTestCase {
   }
 
   func testPointerBoxedPropertyGetsAPublicScope() throws {
-    let outer = try XCTUnwrap(generate()["Outer"])
+    let generated = try generate()
+    let outer = try XCTUnwrap(generated["Outer"])
+    let inner = try XCTUnwrap(generated["Inner"])
 
-    XCTAssertTrue(outer.contains("public void unsafeWithInner(io.scade.swift4j.SwiftBorrow<Inner> body)"),
-                  "a @jvm struct property should expose a scoped borrow")
+    // The scope yields `Inner.Borrowed`, not `Inner`. That distinct type is what
+    // makes storing the view a compile error rather than a latent crash.
+    XCTAssertTrue(outer.contains("public void unsafeWithInner(io.scade.swift4j.SwiftBorrow<Inner.Borrowed> body)"),
+                  "a @jvm struct property should expose a scoped borrow of the Borrowed type")
+    XCTAssertTrue(inner.contains("public static final class Borrowed"),
+                  "a @jvm struct should generate its Borrowed view type")
+    XCTAssertTrue(inner.contains("public void invalidate()"),
+                  "the view must be invalidatable, so use-after-scope throws")
     XCTAssertTrue(outer.contains("private native void unsafeWithInnerImpl(long ptr,"),
                   "the native backing it must be declared")
   }
