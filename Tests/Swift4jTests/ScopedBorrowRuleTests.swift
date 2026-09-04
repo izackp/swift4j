@@ -37,10 +37,17 @@ final class ScopedBorrowRuleTests: XCTestCase {
     public var name: String
     public var blob: Data
 
-    // No single peer to point at.
+    // One level of optional is borrowable; the payload has an address.
     public var maybe: Subject?
     public var forced: Subject!
+    public var nested: Subject??
+
+    // Arrays get element-wise iteration, not a scope over the array itself.
     public var many: [Subject]
+    public var stamps: [Date]
+    public var counts: [Int]
+
+    // No single peer to point at, and no element-wise form either.
     public var mapped: [String: Subject]
 
     // Not addressable, or not a stored location at all.
@@ -70,6 +77,13 @@ final class ScopedBorrowRuleTests: XCTestCase {
         XCTAssertEqual(fromMacro, fromCLI,
                        "generators disagree on '\(varDecl.name)': macro=\(fromMacro) cli=\(fromCLI). "
                        + "A mismatch unbinds every native on the class at RegisterNatives.")
+
+        let eachMacro = VariableDeclSyntax.scopedForEachable(varDecl, isStatic: decl.isStatic)
+        let eachCLI = VarGenerator.scopedForEachable(varDecl, isStatic: decl.isStatic)
+
+        XCTAssertEqual(eachMacro, eachCLI,
+                       "generators disagree on forEach for '\(varDecl.name)': "
+                       + "macro=\(eachMacro) cli=\(eachCLI). Same consequence.")
         checked += 1
       }
     }
@@ -105,7 +119,31 @@ final class ScopedBorrowRuleTests: XCTestCase {
     // addresses the payload where it lies — verified in Swift: writes reach the
     // original, the address is stable, and it falls inside the owner's storage.
     // One level only; `T??` has no single sensible borrow.
+    // `forced` (`Subject!`) is NOT selected. It parses as
+    // ImplicitlyUnwrappedOptionalTypeSyntax rather than OptionalTypeSyntax, so
+    // the optional branch never sees it. Same layout as `Subject?` and it could
+    // be borrowed identically — but both generators exclude it, so this is a
+    // missing feature rather than a mismatch, and R2 is not at risk.
     XCTAssertEqual(selected, ["subject", "namespaced", "modifiedAt", "link", "observed", "maybe"])
+  }
+
+  /// The forEach half of the rule, pinned the same way.
+  func testForEachRuleSelectsExactlyTheArrayProperties() {
+    var selected: Set<String> = []
+
+    for (decl, vars) in fixtureProperties() {
+      for varDecl in vars where VariableDeclSyntax.scopedForEachable(varDecl, isStatic: decl.isStatic) {
+        selected.insert(varDecl.name)
+      }
+    }
+
+    // `stamps` is over-broad on purpose, exactly as `modifiedAt` is above: the
+    // macro cannot tell that `Date` bridges by conversion, so it registers the
+    // native and the CLI declares it without exposing a wrapper.
+    //
+    // `counts` is out because `Int` is primitive, and `mapped` because a
+    // dictionary's values have no stable address to hand out.
+    XCTAssertEqual(selected, ["many", "stamps"])
   }
 
   /// Guards the half of the rule that is genuinely duplicated data rather than

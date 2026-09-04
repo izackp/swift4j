@@ -53,6 +53,17 @@ extension VariableDeclSyntax {
     return name != "String" && name != "Data"
   }
 
+  /// Whether this property gets `unsafeForEach<X>Impl`.
+  ///
+  /// Separate from `scopedBorrowable` because the shapes differ: a scope yields
+  /// one peer, this yields one per element. An array of a non-borrowable
+  /// element is excluded for the same reasons a bare property of it would be.
+  static func scopedForEachable(_ varDecl: VarDecl, isStatic: Bool) -> Bool {
+    guard !isStatic, !varDecl.readonly, !varDecl.computed else { return false }
+    guard let array = varDecl.type.as(ArrayTypeSyntax.self) else { return false }
+    return borrowableType(array.element)
+  }
+
   func bridgings(typeDecl: any JvmTypeDeclSyntax) throws -> [(javaName: String, bridgeName: String, sig: String)] {
     let _self = isStatic ? "" : "J"
 
@@ -68,6 +79,14 @@ extension VariableDeclSyntax {
         decls.append((
           javaName: "unsafeWith\($0.capitalizedName)Impl",
           bridgeName: "\($0.name)_with_jni",
+          sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
+        ))
+      }
+
+      if Self.scopedForEachable($0, isStatic: isStatic) {
+        decls.append((
+          javaName: "unsafeForEach\($0.capitalizedName)Impl",
+          bridgeName: "\($0.name)_each_jni",
           sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
         ))
       }
@@ -93,11 +112,21 @@ extension VariableDeclSyntax {
   }
 
   func makeBridgingDecls(typeDecl: any JvmTypeDeclSyntax) throws -> String {
-    try decls.flatMap {
-      [try makeBridgingGetter(for: $0, in: typeDecl)]
-      + ($0.readonly ? [] : [try makeBridgingSetter(for: $0, in: typeDecl)])
-      + (Self.scopedBorrowable($0, isStatic: isStatic) ? [makeBridgingScopedBorrow(for: $0, in: typeDecl)] : [])
-      + ($0.observable(self) && typeDecl.isObservable ? [try makeBridgingGetterWithObservationTracking(for: $0, in: typeDecl)] : [])
+    try decls.flatMap { decl -> [String] in
+      var parts: [String] = [try makeBridgingGetter(for: decl, in: typeDecl)]
+      if !decl.readonly {
+        parts.append(try makeBridgingSetter(for: decl, in: typeDecl))
+      }
+      if Self.scopedBorrowable(decl, isStatic: isStatic) {
+        parts.append(makeBridgingScopedBorrow(for: decl, in: typeDecl))
+      }
+      if Self.scopedForEachable(decl, isStatic: isStatic) {
+        parts.append(makeBridgingScopedForEach(for: decl, in: typeDecl))
+      }
+      if decl.observable(self) && typeDecl.isObservable {
+        parts.append(try makeBridgingGetterWithObservationTracking(for: decl, in: typeDecl))
+      }
+      return parts
     }.joined(separator: "\n")
   }
 
@@ -171,6 +200,21 @@ return \(mapping.mapped)
                     returnType: "Void",
                     closureParams: defaultClosureParams + ["body"],
                     body: "_jvmScopedBorrow(&\(_self).\(varDecl.name), body)",
+                    isReturning: false)
+  }
+
+  /// Yields each element of an array property to a Java `SwiftBorrow`, in
+  /// place. Distinct from a scope over the array itself, which would hand Java
+  /// a peer for `[T]` — a type with no bridged representation.
+  private func makeBridgingScopedForEach(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) -> String {
+    let _self = typeDecl.selfExpr
+
+    return makeDecl("\(varDecl.name)_each_jni",
+                    in: typeDecl,
+                    paramTypes: defaultParamTypes + ["JavaObject?"],
+                    returnType: "Void",
+                    closureParams: defaultClosureParams + ["body"],
+                    body: "_jvmScopedBorrowEach(&\(_self).\(varDecl.name), body)",
                     isReturning: false)
   }
 

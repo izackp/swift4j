@@ -37,6 +37,7 @@ class VarGenerator {
 \($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed))
 \($0.observable(varDecl) && observationTracking ? generateGetterWithObservationTracking(from: $0, with: &ctx) : "")
 \(generateScopedBorrow(from: $0, with: &ctx))
+\(generateScopedForEach(from: $0, with: &ctx))
 """
     }.joined(separator: "\n")
   }
@@ -85,10 +86,19 @@ class VarGenerator {
   /// Types that bridge by conversion (`Date` -> `java.util.Date`, `URL`)
   /// therefore get the native declared but no caller.
   private func exposesScopedBorrow(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
-    guard scopedBorrowable(decl), let registry else { return false }
-
+    guard scopedBorrowable(decl) else { return false }
     // The borrow is of the payload, so an optional is judged by what it wraps.
-    let type = Self.borrowedElement(of: decl.type)
+    return resolvesToJvmStruct(Self.borrowedElement(of: decl.type))
+  }
+
+  private func exposesScopedForEach(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
+    guard scopedForEachable(decl),
+          let element = decl.type.as(ArrayTypeSyntax.self)?.element else { return false }
+    return resolvesToJvmStruct(Self.borrowedElement(of: element))
+  }
+
+  private func resolvesToJvmStruct(_ type: TypeSyntax) -> Bool {
+    guard let registry else { return false }
 
     if let ident = type.as(IdentifierTypeSyntax.self) {
       return registry.topLevelType(named: ident.name.text)?.is(StructDeclSyntax.self) ?? false
@@ -104,6 +114,17 @@ class VarGenerator {
     return false
   }
 
+  /// Mirrors `VariableDeclSyntax.scopedForEachable` on the macro side.
+  static func scopedForEachable(_ decl: VariableDeclSyntax.VarDecl, isStatic: Bool) -> Bool {
+    guard !isStatic, !decl.readonly, !decl.computed else { return false }
+    guard let array = decl.type.as(ArrayTypeSyntax.self) else { return false }
+    return borrowableType(array.element)
+  }
+
+  private func scopedForEachable(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
+    Self.scopedForEachable(decl, isStatic: varDecl.isStatic)
+  }
+
   /// What a scope over `type` actually hands the callback. An optional yields
   /// its payload; everything else yields itself.
   static func borrowedElement(of type: TypeSyntax) -> TypeSyntax {
@@ -113,7 +134,7 @@ class VarGenerator {
   /// Whether any of this declaration's names gets a public `unsafeWith` — and
   /// therefore whether the owning class needs the `_inScope` flag.
   var exposesAnyScopedBorrow: Bool {
-    varDecl.decls.contains(where: exposesScopedBorrow)
+    varDecl.decls.contains { exposesScopedBorrow($0) || exposesScopedForEach($0) }
   }
 
   private func generateScopedBorrow(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
@@ -158,6 +179,58 @@ class VarGenerator {
       final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
       try {
         \(callee).\(name)Impl(_ptr(), raw -> {
+          scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+          body.with(scope[0]);
+        });
+      } finally {
+        if (scope[0] != null) {
+          scope[0].invalidate();
+        }
+        _inScope = false;
+      }
+    }
+  }
+
+\(nativeDecl)
+"""
+  }
+
+  private func generateScopedForEach(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+    guard scopedForEachable(decl) else { return "" }
+
+    let name = "unsafeForEach\(decl.capitalizedName)"
+    let nativeDecl = "  private native void \(name)Impl(long ptr, io.scade.swift4j.SwiftBorrow body);"
+
+    guard exposesScopedForEach(decl),
+          let element = decl.type.as(ArrayTypeSyntax.self)?.element else { return nativeDecl }
+
+    let borrowedType = Self.borrowedElement(of: element).map(with: &ctx)
+    return
+"""
+  /**
+   * Runs {@code body} against each element in place: no copy is made and writes
+   * through the view are writes into this array.
+   *
+   * <p>{@link #\(name.replacingOccurrences(of: "unsafeForEach", with: "get"))()} cannot do this. It boxes an owned copy per
+   * element, so a write reaches the copy and the array never sees it.
+   *
+   * <p>Each view is invalidated as its iteration ends, so a view kept from one
+   * element cannot be used while reading the next. As with the other scopes,
+   * keep {@code body} to small reads and writes.
+   */
+  public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
+    synchronized (_ptr) {
+      if (_inScope) {
+        throw new IllegalStateException(
+          "\(className).\(name) is already in a scope on this instance");
+      }
+      _inScope = true;
+      final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+      try {
+        \(callee).\(name)Impl(_ptr(), raw -> {
+          if (scope[0] != null) {
+            scope[0].invalidate();
+          }
           scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
           body.with(scope[0]);
         });

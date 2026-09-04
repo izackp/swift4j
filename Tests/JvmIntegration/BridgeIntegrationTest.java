@@ -65,6 +65,10 @@ public class BridgeIntegrationTest {
     scopedWriteLandsInAnOptional();
     scopeOnAnAbsentOptionalDoesNotRun();
     scopedWriteSurvivesAThrowingBody();
+    forEachWriteLandsInTheArray();
+    forEachVisitsEveryElementInOrder();
+    forEachViewIsInvalidatedPerElement();
+    forEachOnAnEmptyArrayDoesNotRun();
 
     section("mutating methods");
     mutatingMethodOnARootPersists();
@@ -148,7 +152,12 @@ public class BridgeIntegrationTest {
     check("nil optional reads back as null", lossy.getMaybe() == null);
   }
 
-  /** Array marshalling boxes one owned copy per element. */
+  /**
+   * Array marshalling boxes one owned copy per element, so the write reaches
+   * the copy. Still pinned, and still the default path — but unsafeForEachLeaves
+   * now exists as the alternative, which is what separates this from a defect
+   * with no answer.
+   */
   private static void arrayElementWriteShouldReachTheArray() {
     Lossy lossy = new Lossy(new Leaf("a", 1), null, new Leaf[] { new Leaf("elem", 3) });
     lossy.getLeaves()[0].setLabel("written");
@@ -278,6 +287,58 @@ public class BridgeIntegrationTest {
     }
     check("a throwing body still stores, and closes its scope",
           lossy.getMaybe().getLabel().equals("stored-before-throw"));
+  }
+
+  /** The defect this exists for: the getter boxes a copy per element. */
+  private static void forEachWriteLandsInTheArray() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2) });
+    lossy.unsafeForEachLeaves(l -> l.setLabel(l.getLabel() + "-written"));
+    Leaf[] after = lossy.getLeaves();
+    check("forEach writes land in the array",
+          after[0].getLabel().equals("e0-written")
+          && after[1].getLabel().equals("e1-written"));
+  }
+
+  private static void forEachVisitsEveryElementInOrder() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2), new Leaf("e2", 3) });
+    StringBuilder seen = new StringBuilder();
+    lossy.unsafeForEachLeaves(l -> seen.append(l.getLabel()).append(","));
+    check("forEach visits every element in order", "e0,e1,e2,".equals(seen.toString()));
+  }
+
+  /**
+   * A view is invalidated as its iteration ends, so one kept from an earlier
+   * element cannot be read while a later element is live. Without that, a
+   * caller could hold a pointer to element 0 while the loop has moved on.
+   */
+  private static void forEachViewIsInvalidatedPerElement() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2) });
+    Leaf.Borrowed[] first = new Leaf.Borrowed[1];
+    boolean[] threw = new boolean[1];
+
+    lossy.unsafeForEachLeaves(l -> {
+      if (first[0] == null) {
+        first[0] = l;
+        return;
+      }
+      try {
+        first[0].getLabel();
+      } catch (IllegalStateException expected) {
+        threw[0] = true;
+      }
+    });
+
+    check("a forEach view is invalidated once its element is done", threw[0]);
+  }
+
+  private static void forEachOnAnEmptyArrayDoesNotRun() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] {});
+    int[] runs = new int[1];
+    lossy.unsafeForEachLeaves(l -> runs[0]++);
+    check("forEach on an empty array does not run", runs[0] == 0);
   }
 
   private static void scopeOnACopyAffectsOnlyTheCopy() {

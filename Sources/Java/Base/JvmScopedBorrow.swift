@@ -58,6 +58,44 @@ public func _jvmScopedBorrow<T: JObjectConvertible>(_ value: inout T?, _ body: J
   value = unwrapped
 }
 
+/// Every element of an array, borrowed in place, one at a time.
+///
+/// `withUnsafeMutableBufferPointer` yields the storage directly, so element
+/// addresses are stable for the duration and writes land in the array rather
+/// than in a per-element copy. That is the whole difference from the getter,
+/// which boxes an owned copy per element and drops every write.
+///
+/// It also moves the buffer out of the array for the duration, which makes
+/// touching the original array inside the closure undefined. Nothing in Swift
+/// catches that here — the array is reached through `UnsafeMutablePointer`,
+/// which exclusivity enforcement does not instrument. The peer's `_inScope`
+/// seal is what prevents it, so this is only sound alongside that.
+public func _jvmScopedBorrowEach<T: JvmPointerBoxed>(_ value: inout [T], _ body: JavaObject?) {
+  guard let body else { return }
+  let callback = JObject(body)
+  value.withUnsafeMutableBufferPointer { buf in
+    guard let base = buf.baseAddress else { return }
+    for i in 0..<buf.count {
+      guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(base + i)) else { continue }
+      callback.call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+    }
+  }
+}
+
+/// Fallback for an array whose element bridges by conversion. Elements are
+/// converted and written back per iteration, so writes still land, but each is
+/// a copy. Nothing generated reaches this; it exists so the emitted thunk
+/// compiles for every array property type.
+public func _jvmScopedBorrowEach<T: JObjectConvertible>(_ value: inout [T], _ body: JavaObject?) {
+  guard let body else { return }
+  let callback = JObject(body)
+  for i in value.indices {
+    guard let peer = value[i].toJavaObject() else { continue }
+    callback.call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+    value[i] = T.fromJavaObject(peer)
+  }
+}
+
 /// Fallback for types that bridge by conversion. The callback receives a
 /// converted object and the result is read back, so writes still land, but it
 /// is a copy rather than a view.

@@ -27,10 +27,14 @@ final class GeneratedPeerTests: XCTestCase {
     public var inner: Inner
     public var modifiedAt: Date
     public var count: Int
-    public init(inner: Inner, modifiedAt: Date, count: Int) {
+    public var inners: [Inner]
+    public var stamps: [Date]
+    public init(inner: Inner, modifiedAt: Date, count: Int, inners: [Inner], stamps: [Date]) {
       self.inner = inner
       self.modifiedAt = modifiedAt
       self.count = count
+      self.inners = inners
+      self.stamps = stamps
     }
   }
 
@@ -198,6 +202,24 @@ final class GeneratedPeerTests: XCTestCase {
       + "    synchronized (_ptr) {\n"
       + "      if (_inScope) {"),
       "the same applies to writes")
+  }
+
+  func testArrayOfJvmStructsGetsAForEachScope() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains("public void unsafeForEachInners(io.scade.swift4j.SwiftBorrow<Inner.Borrowed> body)"),
+                  "an array of a @jvm struct yields its elements, not the array — "
+                  + "[T] has no bridged peer to hand out")
+    XCTAssertTrue(outer.contains("private native void unsafeForEachInnersImpl(long ptr,"),
+                  "the native backing it must be declared")
+
+    // Same split as the scalar case: the macro registers the native from
+    // syntax alone, so the CLI must declare it even where it exposes nothing.
+    XCTAssertTrue(outer.contains("private native void unsafeForEachStampsImpl(long ptr,"),
+                  "an array of a conversion-bridged element still registers, or "
+                  + "RegisterNatives unbinds every native on the class")
+    XCTAssertFalse(outer.contains("public void unsafeForEachStamps("),
+                   "Date elements have no interior pointer to hand out")
   }
 
   func testTypesWithoutAScopeGetNoScopeFlag() throws {
