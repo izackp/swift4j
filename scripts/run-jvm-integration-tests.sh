@@ -114,6 +114,7 @@ find "$out/stubs" -name '*.java' >> "$out/sources.txt"
 find "$root/Sources/Swift4j/java" -name '*.java' >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/BridgeIntegrationTest.java" >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/DangerTest.java" >> "$out/sources.txt"
+echo "$root/Tests/JvmIntegration/Bench.java" >> "$out/sources.txt"
 
 "$JAVA_HOME/bin/javac" -nowarn -cp "$classes" -d "$classes" @"$out/sources.txt"
 
@@ -170,5 +171,17 @@ for scenario in race-root race escape nest seal; do
     fi
     status=1
 done
+
+# Opt-in: the read-path comparison between copy semantics and projections.
+# Off by default because it takes far longer than the checks and answers a
+# different question than "did anything break".
+if [ "${BENCH:-0}" = "1" ]; then
+    echo
+    echo "==> bench"
+    "$JAVA_HOME/bin/java" \
+        -Djava.library.path="$libdir" \
+        -cp "$runtime_cp" \
+        Bench || status=1
+fi
 
 exit $status
