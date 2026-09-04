@@ -854,3 +854,49 @@ moved out for the duration and reading it is undefined.
 So the failure mode through the bridge is silent UB, not a crash. D11 is not
 defence in depth; it is the only thing standing between D10 and undefined
 behaviour, and it has to land first.
+
+
+## D9, D10, D11 built
+
+All three landed, in the order the spec required.
+
+**D11** seals a peer's accessors while one of its scopes is open, reusing the
+`_inScope` flag and the monitor already held. `DangerTest seal` covers read,
+write, and that the seal lifts on the way out.
+
+**D9** borrows an optional's payload through `&value!`. A real borrow, not the
+copy the spec first proposed.
+
+**D10** iterates an array's elements through `withUnsafeMutableBufferPointer`,
+invalidating each view as its iteration ends.
+
+Every guard was verified against a build with it removed. Removing the peer
+lock, the scope monitor, or the buffer borrow reproduces the original fault;
+removing `_inScope`, the seal, or the per-element invalidation lets the
+corresponding check through.
+
+### What these did not fix
+
+The plain getters still lose writes — `box.getLeaf().setLabel(x)`,
+`lossy.getMaybe().setLabel(x)`, `lossy.getLeaves()[0].setLabel(x)`, and
+`box.getLeaf().bump()`. Five checks remain pinned. What changed is that every
+one of them now has a scope to reach for instead, so none is a dead end.
+
+### Gaps found while building
+
+`Subject!` is not borrowable. It parses as
+`ImplicitlyUnwrappedOptionalTypeSyntax`, which the optional branch never sees,
+even though the layout is identical to `Subject?`. Both generators exclude it
+so R2 is safe; it is a missing feature, not a mismatch.
+
+`T??` is excluded deliberately — there is no single sensible borrow.
+
+Dictionary values remain out of reach. They have no stable address for the
+duration of a call, so there is no equivalent to `withUnsafeMutableBufferPointer`
+to build on.
+
+A throwing body does not distinguish a borrow from copy-and-write-back, as was
+assumed when that check was written. JNI leaves the exception pending and the
+thunk runs to the end either way, so both designs store the value. Nothing
+observable from Java separates them, which is why the in-place claim rests on
+measured addresses rather than on a test.
