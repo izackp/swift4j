@@ -1008,3 +1008,68 @@ simply not what the language does.
 That is the real cost, and it is the same fact as the stale-snapshot example
 above, grounded properly: not "surprising to a Java developer" but "different
 from what Swift actually does".
+
+
+## Projection handles, built on branch claude/projection-handles
+
+Implemented after all, to see what it actually costs. `fixes` is untouched.
+
+A getter for a `@jvm` struct property now returns a peer with no storage of its
+own, holding a `SwiftScope` that re-enters its owner. Every operation opens its
+own scope, so nothing holds a pointer between operations and the D8 monitor and
+D11 seal still apply unchanged.
+
+    public Leaf getLeaf() {
+      return Leaf.projection(this::unsafeWithLeafRaw);
+    }
+
+The scope moved into a private `Raw` helper, which is what projections re-enter
+through and is also what the public `unsafeWith` is built on. `Raw` is itself
+projection-aware, which is what makes a chain reach the root:
+`mixed.getHolder().getLeaf().setLabel(x)` lands in `mixed`.
+
+Covers all three property shapes. Optionals return a projection when present
+and null when absent, with presence taken from the existing scope — it runs
+zero times when there is no payload, so that half needed no new native. Arrays
+return element projections backed by a new indexed scope; iteration cannot back
+a projection, because a projection is re-entered per operation and has to land
+on the same element every time.
+
+Two new natives, both registered by the macro and declared by the CLI:
+`unsafeElementOf<X>Impl` and `sizeOf<X>Impl`. The size native exists because
+taking the length from the copying getter would box the whole array — the exact
+cost this design removes.
+
+**All four getter defects report FIXED.** Only the `HashMap` key remains, which
+is ignorable. 56 integration checks and 25 unit tests green, and the five
+danger scenarios still pass.
+
+### What it cost
+
+`_ptr()` has to materialise. A projection has no address, so handing one to
+Swift produces a real box, kept in a field so it outlives the JNI call that
+reads it. Fresh per call rather than cached, since the owner may have moved on
+and a stale box would be worse than the copy this exists to avoid.
+
+Every accessor now branches on the backing. `equals`, `hashCode` and `copy()`
+go through `_ptr()` and therefore materialise, which is correct but means
+comparing two projections copies both.
+
+The divergence is pinned as a test rather than left implicit:
+
+    Leaf before = box.getLeaf();
+    box.unsafeWithLeaf(l -> l.setLabel("after"));
+    before.getLabel();   // "after" — Swift would have given a snapshot
+
+`copy()` is how to take a real snapshot, and that is also pinned.
+
+An element projection outliving its index reads as absent rather than trapping,
+since the array may legitimately have shrunk.
+
+### Not measured
+
+Nothing here has been benchmarked. The claim that projections are cheaper on
+the read path is still an argument from what the code does — no malloc, no
+copy, no Reaper registration — not a measurement. Reading several fields off
+one value is several crossings now, and whether that is a net win depends on
+CaptureAndroid's access pattern, which has not been checked either.
