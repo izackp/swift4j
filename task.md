@@ -900,3 +900,85 @@ assumed when that check was written. JNI leaves the exception pending and the
 thunk runs to the end either way, so both designs store the value. Nothing
 observable from Java separates them, which is why the in-place claim rests on
 measured addresses rather than on a test.
+
+
+## The four getter defects: decided
+
+`box.getLeaf().setLabel(x)`, `lossy.getMaybe().setLabel(x)`,
+`lossy.getLeaves()[0].setLabel(x)` and `box.getLeaf().bump()` are one defect,
+not four: the getter returns an owned copy, so the write lands somewhere
+unreachable.
+
+The precise defect is **mutating a temporary**, not mutating a copy. This is
+correct code and must stay correct:
+
+    Leaf l = box.getLeaf();
+    l.setLabel("x");
+
+`l` is a named copy, the write lands in it, and it is observable through `l` —
+exactly what `var l = box.leaf` does in Swift. Only the unbound form is
+broken, because the copy is unreachable the moment the expression ends.
+
+That distinction rules out the first idea considered here, an immutable
+projection type returned by getters. It would have made all four uncompilable,
+but it would also have broken the bound form above and forced a pointless
+`copy()` on correct code.
+
+**Decision: keep copy semantics.** The defect is real but narrow, every path
+now has a scope to reach for, and the broken spelling is syntactically
+detectable.
+
+### Planned: a lint rule rather than an API change
+
+Emit two markers from the generator — `@SwiftCopyingGetter` on the getters,
+`@SwiftMutating` on setters and mutating methods — and warn when a
+`@SwiftMutating` call has a receiver that is an unbound `@SwiftCopyingGetter`
+call, or an array index into one.
+
+No name heuristics and no dataflow: "unbound call expression" is syntax. It
+covers all four, including `bump()`, and both escapes are what the diagnostic
+should suggest — bind the copy if that was the intent, open a scope if the
+owner was.
+
+Android Lint is the target. It sees Kotlin and Java through one UAST detector,
+runs in the IDE, and fails `./gradlew lint`. detekt is Kotlin-only and needs
+type-resolution mode; Error Prone cannot see Kotlin at all.
+
+Not started. The generator side is small; the `lint-checks` module and its
+wiring into CaptureAndroid is the bulk, and that plumbing has not been looked
+at yet.
+
+### Not taken: projection handles
+
+`box.getLeaf()` returns a `Leaf` backed by `(owner, accessor)` rather than its
+own box, forwarding every operation back through the owner:
+
+    getLabel()     -> box.unsafeWithLeaf(v -> v.getLabel())
+    setLabel("x")  -> box.unsafeWithLeaf(v -> v.setLabel("x"))
+
+Same class, same interface, so `box.getLeaf().setLabel(x)` simply works. All
+four defects disappear with no annotations, no lint rule and no new type.
+
+It is also the best answer to the performance problem this branch exists for.
+A property read today does a Swift `malloc`, a copy, and a Reaper
+registration; a handle allocates one small Java object and nothing on the Swift
+side. For read-one-field-and-discard — the sort path — it is strictly cheaper.
+It loses where several fields are read off one value, which becomes several
+JNI crossings instead of one crossing and several local reads.
+
+Rejected because it is reference semantics, and value semantics was already
+chosen. It trades the silent-write bug for a stale-snapshot bug:
+
+    Leaf before = box.getLeaf();
+    box.setLeaf(other);
+    before.getLabel();   // other's label; `before` was never a snapshot
+
+`copy()` becomes the only way to take a snapshot. Also: every `Leaf` would
+carry a mode (owned pointer or projection) that every accessor branches on,
+chained projections re-enter through the whole chain, and a handle touched
+inside an `unsafeWith` on its own owner hits the D11 seal.
+
+Worth revisiting only if measurement shows the boxing on the read path is still
+the dominant cost after the current work, and if CaptureAndroid turns out to
+read getter results once and discard them rather than holding them as
+snapshots. That usage question has not been checked.
