@@ -77,6 +77,7 @@ public class BridgeIntegrationTest {
     projectionSurvivesTheArrayShrinking();
     projectionPassedToSwiftIsMaterialised();
     chainedProjectionReachesTheRoot();
+    projectionsCompareAndHashWithoutMaterialising();
 
     section("mutating methods");
     mutatingMethodOnARootPersists();
@@ -292,6 +293,34 @@ public class BridgeIntegrationTest {
     mixed.getHolder().getLeaf().setLabel("through-the-chain");
     check("a chained projection writes back to the root",
           "through-the-chain".equals(mixed.getHolder().getLeaf().getLabel()));
+  }
+
+  /**
+   * These route through the scope rather than through _ptr().
+   *
+   * Materialising would give the right answers, but a projection exists to
+   * avoid the copy, and copying to compare or to hash would give most of it
+   * back. copy() was the worst of the three: materialising to get an address
+   * and then copying that is two copies to produce one.
+   *
+   * Two projections of the same owner are the case that pins the ordering. The
+   * argument has to be materialised before the receiver's scope opens, or the
+   * second entry into that owner hits the nesting guard.
+   */
+  private static void projectionsCompareAndHashWithoutMaterialising() {
+    Box box = new Box(new Leaf("same", 1), "tag");
+    Box other = new Box(new Leaf("same", 1), "tag");
+
+    check("two projections of one owner compare equal",
+          box.getLeaf().equals(box.getLeaf()));
+    check("projections of distinct owners compare by value",
+          box.getLeaf().equals(other.getLeaf()));
+    check("a projection hashes like its value",
+          box.getLeaf().hashCode() == other.getLeaf().hashCode());
+
+    other.unsafeWithLeaf(l -> l.setLabel("different"));
+    check("projections compare unequal once the values diverge",
+          !box.getLeaf().equals(other.getLeaf()));
   }
 
   // ---- unsafeWith ----

@@ -38,6 +38,10 @@ extension ClassGenerator: TypeGeneratorProtocol {
     // can be re-entered while one is open.
     let hasScope = varGens.contains { $0.exposesAnyScopedBorrow }
 
+    // Only value types get projections; a class peer already refers to one
+    // Swift object, so its getters already propagate.
+    let isValue = typeDecl is StructDeclSyntax
+
     var failableCount = 0
     let ctors = ctorGens.enumerated().map { (index, gen) -> String in
       var failableOrdinal: Int? = nil
@@ -117,6 +121,30 @@ extension ClassGenerator: TypeGeneratorProtocol {
     // Object.equals/hashCode overrides delegating into the synthesized Swift
     // thunks (see swift4j macro `expandHashableDecls`). Two bridged instances
     // are equal iff Swift `==` says so; hashCode mirrors Swift `hashValue`.
+    // The receiver goes through its scope; the argument materialises via
+    // _ptr(). Scoping both would be one fewer copy, but two projections of the
+    // same owner — `box.getLeaf().equals(box.getLeaf())` — would then open that
+    // owner's scope twice and hit the nesting guard, which is right to refuse.
+    // One copy per comparison, and none when neither side is projected.
+    // The argument is materialised *before* the receiver's scope opens. Doing
+    // it inside would re-enter the same owner when both project from it, and
+    // the nesting guard is right to refuse that.
+    let hashableProjection = isValue ?
+"""
+    if (_projected()) {
+      final long other = ((\(name)) o)._ptr();
+      return _through(v -> v.equalsImpl(v._ptr(), other));
+    }
+""" : ""
+
+    let hashCodeProjection = isValue ?
+"""
+    if (_projected()) {
+      return _through(v -> v.hashCode());
+    }
+
+""" : ""
+
     let hashableBridging = typeDecl.conformsToHashable ?
 """
 
@@ -124,12 +152,12 @@ extension ClassGenerator: TypeGeneratorProtocol {
   public boolean equals(Object o) {
     if (this == o) return true;
     if (!(o instanceof \(name))) return false;
-    return equalsImpl(_ptr(), ((\(name)) o)._ptr());
+\(hashableProjection)    return equalsImpl(_ptr(), ((\(name)) o)._ptr());
   }
 
   @Override
   public int hashCode() {
-    return hashCodeImpl(_ptr());
+\(hashCodeProjection)    return hashCodeImpl(_ptr());
   }
 
   private native boolean equalsImpl(long ptr, long otherPtr);
@@ -140,9 +168,6 @@ extension ClassGenerator: TypeGeneratorProtocol {
     // so `box.getLeaf().setLabel(x)` writes into `box` rather than into a copy
     // that is discarded at the end of the expression.
     //
-    // Only value types get this. A class peer already refers to one Swift
-    // object, so its getters already propagate.
-    let isValue = typeDecl is StructDeclSyntax
     let projectionFields = isValue ?
 """
 
@@ -210,6 +235,11 @@ extension ClassGenerator: TypeGeneratorProtocol {
    * matching what `var x = y` does for the underlying Swift value type.
    */
   public \(name) copy() {
+    // Through the scope, not _ptr(). Materialising would copy to get an
+    // address and then copy that — two copies to produce one.
+    if (_projected()) {
+      return _through(v -> v.copy());
+    }
     return fromPtr(copyImpl(_ptr()));
   }
 
