@@ -635,3 +635,44 @@ actually lives inside.
 Unresolved: what identifies the root for a peer built by `fromPtr` from a
 Swift-side return value, where there is no enclosing allocation and the peer is
 itself the root.
+
+### D8 as built, and where the spec above was wrong
+
+Two things changed on contact with the code.
+
+**The lock is a per-peer Java monitor, not a striped Swift table.** Every peer
+already owns a `SwiftPtr`, so `synchronized (_ptr)` costs no allocation and
+needs no stripe index. More importantly it lives entirely in generated Java:
+no macro change, no native signature change, and so no `RegisterNatives`
+exposure. The striped table was solving a problem — keying an interior pointer
+back to its root — that disappears once the lock is on the peer.
+
+**The scope rule was backwards.** The spec had `unsafeWith` take no lock while
+the `Borrowed` view's accessors each took one. That is unsound. The scope holds
+an interior pointer into the owner for its entire duration, so a concurrent
+`setLeaf` corrupts it no matter how the individual view accesses are guarded.
+Per-access exclusion inside the scope buys nothing and would advertise a safety
+it does not provide, so `Borrowed` forwards unguarded and `unsafeWith` stays
+caller-serialised — which is what the `unsafe` prefix already promised.
+
+The deadlock reasoning survives: holding the lock across the callback is the
+only thing that would make scopes safe, and arbitrary Java runs in there.
+Methods taking a closure are excluded for the same reason.
+
+Also excluded, each for its own reason: `static` members (no instance to lock),
+`equals` / `hashCode` (locking two peers in argument order deadlocks against
+the reversed call), `async` methods (the launch is guarded, the work it does
+after returning is not), and Swift-side mutation of a bridged class while the
+JVM reads it (nothing on this side of the bridge is in that access path).
+
+### Small strings hid the bug
+
+The first `race-root` scenario wrote `"w0"`, `"w1"`, … and survived nine
+million *unguarded* iterations. Swift stores a string of up to 15 UTF-8 bytes
+inline in the struct, so there was no refcounted buffer to release and no
+hazard to hit. Padding the writes past that threshold reproduced the crash in
+under a second.
+
+Worth carrying forward: any test of ARC-level races through the bridge has to
+force heap storage, or it silently tests nothing. A green run is otherwise
+indistinguishable from a fixed bug.
