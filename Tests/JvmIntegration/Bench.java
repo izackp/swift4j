@@ -132,6 +132,17 @@ public class Bench {
              lossy.unsafeForEachLeaves(l -> l.getCount());
              return null;
            });
+
+      // Indexed: one scope, one copy, whatever the array's length.
+      runN(String.format("indexed  of %5d   getLeavesAt(2).getLabel()", sizes[s]),
+           Math.max(iterations[s], 200_000),
+           () -> lossy.getLeavesAt(2).getLabel());
+      runN(String.format("indexed  of %5d   unsafeElementOfLeaves(2)", sizes[s]),
+           Math.max(iterations[s], 200_000),
+           () -> {
+             lossy.unsafeElementOfLeaves(2, l -> l.getCount());
+             return null;
+           });
     }
   }
 

@@ -99,6 +99,31 @@ public func _jvmScopedBorrowEach<T: JvmPointerBoxed>(_ value: inout [T], _ body:
   }
 }
 
+/// One element of an array, addressed by index.
+///
+/// The copying getter marshals the whole array to hand back one element, so
+/// reaching index 2 of ten thousand costs ten thousand boxes and about 13 ms.
+/// This is O(1): one scope, one element, however long the array is.
+///
+/// An out-of-range index runs the body zero times. The Java wrapper turns that
+/// into the IndexOutOfBoundsException a caller expects from an index.
+public func _jvmScopedBorrowElement<T: JvmPointerBoxed>(_ value: inout [T], _ index: Int, _ body: JavaObject?) {
+  guard let body, value.indices.contains(index) else { return }
+  value.withUnsafeMutableBufferPointer { buf in
+    guard let base = buf.baseAddress else { return }
+    guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(base + index)) else { return }
+    _invoke(body, peer)
+  }
+}
+
+/// Fallback mirroring the one below, for a conversion-bridged element.
+public func _jvmScopedBorrowElement<T: JObjectConvertible>(_ value: inout [T], _ index: Int, _ body: JavaObject?) {
+  guard let body, value.indices.contains(index) else { return }
+  guard let peer = value[index].toJavaObject() else { return }
+  _invoke(body, peer)
+  value[index] = T.fromJavaObject(peer)
+}
+
 /// Fallback for an array whose element bridges by conversion. Elements are
 /// converted and written back per iteration, so writes still land, but each is
 /// a copy. Nothing generated reaches this; it exists so the emitted thunk

@@ -89,6 +89,16 @@ extension VariableDeclSyntax {
           bridgeName: "\($0.name)_each_jni",
           sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
         ))
+        decls.append((
+          javaName: "unsafeElementOf\($0.capitalizedName)Impl",
+          bridgeName: "\($0.name)_element_jni",
+          sig: "(JILio/scade/swift4j/SwiftBorrow;)V"
+        ))
+        decls.append((
+          javaName: "sizeOf\($0.capitalizedName)Impl",
+          bridgeName: "\($0.name)_size_jni",
+          sig: "(J)I"
+        ))
       }
 
       if !$0.readonly {
@@ -122,6 +132,8 @@ extension VariableDeclSyntax {
       }
       if Self.scopedForEachable(decl, isStatic: isStatic) {
         parts.append(makeBridgingScopedForEach(for: decl, in: typeDecl))
+        parts.append(makeBridgingScopedElement(for: decl, in: typeDecl))
+        parts.append(makeBridgingArraySize(for: decl, in: typeDecl))
       }
       if decl.observable(self) && typeDecl.isObservable {
         parts.append(try makeBridgingGetterWithObservationTracking(for: decl, in: typeDecl))
@@ -216,6 +228,34 @@ return \(mapping.mapped)
                     closureParams: defaultClosureParams + ["body"],
                     body: "_jvmScopedBorrowEach(&\(_self).\(varDecl.name), body)",
                     isReturning: false)
+  }
+
+  /// Yields one element of an array property, addressed by index. This is what
+  /// makes reaching into a long array O(1) instead of O(n).
+  private func makeBridgingScopedElement(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) -> String {
+    let _self = typeDecl.selfExpr
+
+    return makeDecl("\(varDecl.name)_element_jni",
+                    in: typeDecl,
+                    paramTypes: defaultParamTypes + ["JavaInt", "JavaObject?"],
+                    returnType: "Void",
+                    closureParams: defaultClosureParams + ["index", "body"],
+                    body: "_jvmScopedBorrowElement(&\(_self).\(varDecl.name), Int(index), body)",
+                    isReturning: false)
+  }
+
+  /// The element count alone, so a caller can bound a loop without marshalling
+  /// the array to find out how long it is.
+  private func makeBridgingArraySize(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) -> String {
+    let _self = typeDecl.selfExpr
+
+    return makeDecl("\(varDecl.name)_size_jni",
+                    in: typeDecl,
+                    paramTypes: defaultParamTypes,
+                    returnType: "JavaInt",
+                    closureParams: defaultClosureParams,
+                    body: "return JavaInt(\(_self).\(varDecl.name).count)",
+                    isReturning: true)
   }
 
   //MARK: - Getter + Observation

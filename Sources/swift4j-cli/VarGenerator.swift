@@ -199,7 +199,12 @@ class VarGenerator {
     guard scopedForEachable(decl) else { return "" }
 
     let name = "unsafeForEach\(decl.capitalizedName)"
-    let nativeDecl = "  private native void \(name)Impl(long ptr, io.scade.swift4j.SwiftBorrow body);"
+    let elementName = "unsafeElementOf\(decl.capitalizedName)"
+    let cap = decl.capitalizedName
+    let nativeDecl =
+      "  private native void \(name)Impl(long ptr, io.scade.swift4j.SwiftBorrow body);\n"
+      + "  private native void \(elementName)Impl(long ptr, int index, io.scade.swift4j.SwiftBorrow body);\n"
+      + "  private native int sizeOf\(cap)Impl(long ptr);"
 
     guard exposesScopedForEach(decl),
           let element = decl.type.as(ArrayTypeSyntax.self)?.element else { return nativeDecl }
@@ -238,6 +243,74 @@ class VarGenerator {
         if (scope[0] != null) {
           scope[0].invalidate();
         }
+        _inScope = false;
+      }
+    }
+  }
+
+  /**
+   * How many elements this array holds, without marshalling it.
+   */
+  public int sizeOf\(cap)() {
+    synchronized (_ptr) {
+      if (_inScope) {
+        throw new IllegalStateException(
+          "\(className).sizeOf\(cap) is inside an unsafeWith scope; the callback may only touch the view");
+      }
+      return \(callee).sizeOf\(cap)Impl(_ptr());
+    }
+  }
+
+  /**
+   * One element, copied out. Constant time: the array is not marshalled.
+   *
+   * <p>{@link #\(name.replacingOccurrences(of: "unsafeForEach", with: "get"))()} boxes every element to hand back one, so
+   * reaching an index costs as much as the array is long — measured at about
+   * 13 ms and ten thousand boxes for one element of a ten-thousand-element
+   * array. This costs one scope and one copy, whatever the length.
+   *
+   * <p>The result is a copy, like every other getter here, so writes to it do
+   * not reach the array. Use {@link #\(elementName)(int, io.scade.swift4j.SwiftBorrow)} for that.
+   */
+  public \(borrowedType) get\(cap)At(int index) {
+    final \(borrowedType)[] out = new \(borrowedType)[1];
+    \(elementName)Raw(index, raw -> out[0] = ((\(borrowedType)) raw).copy());
+    if (out[0] == null) {
+      throw new IndexOutOfBoundsException(
+        "\(className).\(decl.name)[" + index + "]");
+    }
+    return out[0];
+  }
+
+  /**
+   * Runs {@code body} against one element in place, addressed by index. Writes
+   * through the view are writes into this array, and reaching the element is
+   * constant time.
+   */
+  public void \(elementName)(int index, io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
+    final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+    try {
+      \(elementName)Raw(index, raw -> {
+        scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+        body.with(scope[0]);
+      });
+    } finally {
+      if (scope[0] != null) {
+        scope[0].invalidate();
+      }
+    }
+  }
+
+  private void \(elementName)Raw(int index, io.scade.swift4j.SwiftBorrow body) {
+    synchronized (_ptr) {
+      if (_inScope) {
+        throw new IllegalStateException(
+          "\(className).\(elementName) is already in a scope on this instance");
+      }
+      _inScope = true;
+      try {
+        \(callee).\(elementName)Impl(_ptr(), index, body);
+      } finally {
         _inScope = false;
       }
     }

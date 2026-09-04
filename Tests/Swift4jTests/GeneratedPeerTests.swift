@@ -222,6 +222,33 @@ final class GeneratedPeerTests: XCTestCase {
                    "Date elements have no interior pointer to hand out")
   }
 
+  func testArraysGetConstantTimeIndexedAccess() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains("public Inner getInnersAt(int index)"),
+                  "reaching one element must not depend on the array's length")
+    XCTAssertTrue(outer.contains("public void unsafeElementOfInners(int index, io.scade.swift4j.SwiftBorrow<Inner.Borrowed> body)"),
+                  "and the same index must be writable in place")
+    XCTAssertTrue(outer.contains("public int sizeOfInners()"),
+                  "a caller needs the length without marshalling the array to get it")
+
+    XCTAssertTrue(outer.contains("private native void unsafeElementOfInnersImpl(long ptr, int index,"))
+    XCTAssertTrue(outer.contains("private native int sizeOfInnersImpl(long ptr);"))
+
+    // The Swift side runs the body zero times for an index it does not hold,
+    // which would otherwise surface as a null rather than as a bounds error.
+    XCTAssertTrue(outer.contains("throw new IndexOutOfBoundsException("))
+  }
+
+  func testConversionBridgedArrayDeclaresTheNativesButExposesNothing() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains("private native int sizeOfStampsImpl(long ptr);"),
+                  "registered by the macro from syntax alone, so it must be declared")
+    XCTAssertFalse(outer.contains("public Date getStampsAt("),
+                   "a Date element has no interior pointer to copy out of")
+  }
+
   func testTypesWithoutAScopeGetNoScopeFlag() throws {
     let inner = try XCTUnwrap(generate()["Inner"])
     XCTAssertFalse(inner.contains("_inScope"),

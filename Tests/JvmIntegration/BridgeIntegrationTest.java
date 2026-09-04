@@ -69,6 +69,10 @@ public class BridgeIntegrationTest {
     forEachVisitsEveryElementInOrder();
     forEachViewIsInvalidatedPerElement();
     forEachOnAnEmptyArrayDoesNotRun();
+    indexedElementReadIsACopy();
+    indexedElementScopeWritesThrough();
+    indexedElementOutOfRangeThrows();
+    arraySizeDoesNotMarshalTheArray();
 
     section("mutating methods");
     mutatingMethodOnARootPersists();
@@ -339,6 +343,56 @@ public class BridgeIntegrationTest {
     int[] runs = new int[1];
     lossy.unsafeForEachLeaves(l -> runs[0]++);
     check("forEach on an empty array does not run", runs[0] == 0);
+  }
+
+  /**
+   * Constant time, and a copy like every other getter.
+   *
+   * The copying getter marshals the whole array to hand back one element:
+   * measured at 14 ms and ten thousand boxes to reach index 2 of a
+   * ten-thousand-element array, against 1.7 us and one box here.
+   */
+  private static void indexedElementReadIsACopy() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2) });
+
+    check("indexed read returns the element", "e1".equals(lossy.getLeavesAt(1).getLabel()));
+
+    lossy.getLeavesAt(1).setLabel("written");
+    check("indexed read is a copy, so a write to it does not reach the array",
+          "e1".equals(lossy.getLeavesAt(1).getLabel()));
+  }
+
+  private static void indexedElementScopeWritesThrough() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2) });
+
+    lossy.unsafeElementOfLeaves(1, l -> l.setLabel("written-through"));
+    check("indexed scope writes into the array",
+          "written-through".equals(lossy.getLeavesAt(1).getLabel()));
+    check("and left its neighbour alone", "e0".equals(lossy.getLeavesAt(0).getLabel()));
+  }
+
+  /**
+   * The Swift side runs the body zero times for an index it does not hold,
+   * which would otherwise surface as a null. An index is expected to throw.
+   */
+  private static void indexedElementOutOfRangeThrows() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1) });
+    try {
+      lossy.getLeavesAt(5);
+      check("out-of-range index throws", false);
+    } catch (IndexOutOfBoundsException expected) {
+      check("out-of-range index throws", true);
+    }
+  }
+
+  private static void arraySizeDoesNotMarshalTheArray() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2),
+                                         new Leaf("e2", 3) });
+    check("size reports the element count", lossy.sizeOfLeaves() == 3);
   }
 
   private static void scopeOnACopyAffectsOnlyTheCopy() {
