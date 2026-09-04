@@ -16,6 +16,7 @@ import org.jetbrains.uast.UElement;
 import org.jetbrains.uast.UExpression;
 import org.jetbrains.uast.UParenthesizedExpression;
 import org.jetbrains.uast.UQualifiedReferenceExpression;
+import org.jetbrains.uast.UResolvable;
 
 import java.util.Collections;
 import java.util.List;
@@ -73,54 +74,75 @@ public class DiscardedSwiftWriteDetector extends Detector implements Detector.Ua
     return new com.android.tools.lint.client.api.UElementHandler() {
       @Override
       public void visitCallExpression(UCallExpression node) {
-        PsiMethod callee = node.resolve();
-        if (callee == null || !hasAnnotation(context, callee, MUTATING)) {
-          return;
-        }
-
-        UCallExpression source = originatingCall(node.getReceiver());
-        if (source == null) {
-          return;
-        }
-
-        PsiMethod getter = source.resolve();
-        if (getter == null || !hasAnnotation(context, getter, COPYING_GETTER)) {
-          return;
-        }
-
-        context.report(ISSUE, node, context.getLocation(node),
-                       "`" + callee.getName() + "` writes to a copy returned by `"
-                       + getter.getName() + "`, which is discarded. Use a scope to edit "
-                       + "the owner, or assign the copy to a variable first.");
+        check(context, node, node.resolve(), node.getReceiver());
       }
+
     };
   }
 
+  private static void check(JavaContext context, UElement site, PsiMethod callee, UExpression receiver) {
+    if (callee == null || !hasAnnotation(context, callee, MUTATING)) {
+      return;
+    }
+
+    PsiMethod getter = originatingGetter(receiver);
+    if (getter == null || !hasAnnotation(context, getter, COPYING_GETTER)) {
+      return;
+    }
+
+    context.report(ISSUE, site, context.getLocation(site),
+                   "`" + callee.getName() + "` writes to a copy returned by `"
+                   + getter.getName() + "`, which is discarded. Use a scope to edit "
+                   + "the owner, or assign the copy to a variable first.");
+  }
+
   /**
-   * Unwraps a receiver down to the call that produced it, seeing through
-   * parentheses and array indexing. An index is included because the elements
-   * of a copying getter's array are copies as well.
+   * Unwraps a receiver down to the method that produced it, seeing through
+   * parentheses, array indexing, and Kotlin's property syntax. An index is
+   * included because the elements of a copying getter's array are copies too.
    *
-   * <p>Returns null for anything else — notably a variable reference, which is
-   * exactly the bound case this rule must not flag.
+   * <p>Returns null for anything that is not a method call — notably a variable
+   * reference, which is exactly the bound case this rule must not flag.
    */
-  private static UCallExpression originatingCall(UExpression expression) {
-    UExpression current = expression;
+  private static PsiMethod originatingGetter(UExpression expression) {
+    UExpression current = unwrap(expression);
     while (current != null) {
-      if (current instanceof UParenthesizedExpression) {
-        current = ((UParenthesizedExpression) current).getExpression();
-      } else if (current instanceof UArrayAccessExpression) {
-        current = ((UArrayAccessExpression) current).getReceiver();
-      } else if (current instanceof UQualifiedReferenceExpression) {
-        current = ((UQualifiedReferenceExpression) current).getSelector();
-      } else if (current instanceof UCallExpression) {
-        return (UCallExpression) current;
-      } else {
-        return null;
+      if (current instanceof UArrayAccessExpression) {
+        current = unwrap(((UArrayAccessExpression) current).getReceiver());
+        continue;
       }
+      return resolveToMethod(current);
     }
     return null;
   }
+
+  /** Strips parentheses and reduces a qualified reference to its selector. */
+  private static UExpression unwrap(UExpression expression) {
+    UExpression current = expression;
+    while (true) {
+      if (current instanceof UParenthesizedExpression) {
+        current = ((UParenthesizedExpression) current).getExpression();
+      } else if (current instanceof UQualifiedReferenceExpression) {
+        current = ((UQualifiedReferenceExpression) current).getSelector();
+      } else {
+        return current;
+      }
+    }
+  }
+
+  /**
+   * The method behind an expression: the callee of a call, or the accessor a
+   * Kotlin property reference resolves to. Anything else — a local, a field —
+   * yields null.
+   */
+  private static PsiMethod resolveToMethod(UExpression expression) {
+    if (!(expression instanceof UResolvable)) {
+      return null;
+    }
+    Object resolved = ((UResolvable) expression).resolve();
+    return resolved instanceof PsiMethod ? (PsiMethod) resolved : null;
+  }
+
 
   private static boolean hasAnnotation(JavaContext context, PsiMethod method, String name) {
     return context.getEvaluator().getAnnotation(method, name) != null;

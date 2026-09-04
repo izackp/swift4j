@@ -1,6 +1,7 @@
 package io.scade.swift4j.lint;
 
 import static com.android.tools.lint.checks.infrastructure.TestFiles.java;
+import static com.android.tools.lint.checks.infrastructure.TestFiles.kotlin;
 import static com.android.tools.lint.checks.infrastructure.TestLintTask.lint;
 
 import com.android.tools.lint.checks.infrastructure.TestFile;
@@ -143,6 +144,53 @@ public class DiscardedSwiftWriteDetectorTest {
             + "  void run(Box box) {\n"
             + "    box.getUnmarkedLeaf().setLabel(\"x\");\n"
             + "  }\n"
+            + "}\n"))
+        .issues(DiscardedSwiftWriteDetector.ISSUE)
+        .run()
+        .expectClean();
+  }
+
+  /**
+   * Kotlin writes this as a property assignment, not a call. The consuming app
+   * is Kotlin, so a rule that only sees the Java spelling catches nothing there.
+   */
+  @Test
+  public void flagsKotlinPropertyAssignmentOnADiscardedCopy() {
+    lint()
+        .files(ANNOTATIONS, MUTATING, PEERS, BOX, kotlin(""
+            + "package app\n"
+            + "import peers.Box\n"
+            + "fun run(box: Box) {\n"
+            + "  box.leaf.label = \"x\"\n"
+            + "}\n"))
+        .issues(DiscardedSwiftWriteDetector.ISSUE)
+        .run()
+        .expectErrorCount(1);
+  }
+
+  @Test
+  public void flagsKotlinMutatingCallOnADiscardedCopy() {
+    lint()
+        .files(ANNOTATIONS, MUTATING, PEERS, BOX, kotlin(""
+            + "package app\n"
+            + "import peers.Box\n"
+            + "fun run(box: Box) {\n"
+            + "  box.leaf.bump()\n"
+            + "}\n"))
+        .issues(DiscardedSwiftWriteDetector.ISSUE)
+        .run()
+        .expectErrorCount(1);
+  }
+
+  @Test
+  public void allowsKotlinWriteToABoundCopy() {
+    lint()
+        .files(ANNOTATIONS, MUTATING, PEERS, BOX, kotlin(""
+            + "package app\n"
+            + "import peers.Box\n"
+            + "fun run(box: Box) {\n"
+            + "  val l = box.leaf\n"
+            + "  l.label = \"x\"\n"
             + "}\n"))
         .issues(DiscardedSwiftWriteDetector.ISSUE)
         .run()
