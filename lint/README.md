@@ -52,8 +52,15 @@ dependencies {
 
 ## Status
 
-The detector compiles against `lint-api` 31.13.0. **Its behaviour is
-unverified**: `src/test` holds the cases, including the bound-copy case that
-must stay clean, but running them needs `lint-tests`, which requires a Gradle
-build this repo does not have. Run `./gradlew :lint-checks:test` from a host
-Android project before relying on it.
+Verified against Android Lint 31.13.0: all seven cases pass, including the
+bound-copy case that must stay clean.
+
+Each guard was checked by removing it and confirming a test fails — the
+annotation checks, and the array-index unwrap. That found a gap: the original
+"unmarked getter" case never reached the copying-getter check, because its
+callee was not mutating either, so deleting that check broke nothing. The
+`allowsMutationOffAGetterThatDoesNotCopy` case exists to cover it.
+
+The module has no build of its own here. To run the tests, point a Gradle
+project at `src/main/java` and `src/test/java` with `lint-api` and
+`lint-tests` on the test classpath.

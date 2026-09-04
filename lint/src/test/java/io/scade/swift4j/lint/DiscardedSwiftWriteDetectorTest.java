@@ -35,6 +35,7 @@ public class DiscardedSwiftWriteDetectorTest {
       + "  @io.scade.swift4j.SwiftCopyingGetter public Leaf getLeaf() { return null; }\n"
       + "  @io.scade.swift4j.SwiftCopyingGetter public Leaf[] getLeaves() { return null; }\n"
       + "  public String getTag() { return null; }\n"
+      + "  public Leaf getUnmarkedLeaf() { return null; }\n"
       + "}\n");
 
   @Test
@@ -118,6 +119,29 @@ public class DiscardedSwiftWriteDetectorTest {
             + "public class Use {\n"
             + "  String run(Box box) {\n"
             + "    return box.getLeaf().getLabel();\n"
+            + "  }\n"
+            + "}\n"))
+        .issues(DiscardedSwiftWriteDetector.ISSUE)
+        .run()
+        .expectClean();
+  }
+
+  /**
+   * A mutating call on a getter that is NOT marked copying.
+   *
+   * This is the case that exercises the copying-getter gate. The read-only test
+   * below does not: its callee is unmarked, so the check returns before ever
+   * looking at the receiver. Without this, deleting the gate breaks nothing.
+   */
+  @Test
+  public void allowsMutationOffAGetterThatDoesNotCopy() {
+    lint()
+        .files(ANNOTATIONS, MUTATING, PEERS, BOX, java(""
+            + "package app;\n"
+            + "import peers.Box;\n"
+            + "public class Use {\n"
+            + "  void run(Box box) {\n"
+            + "    box.getUnmarkedLeaf().setLabel(\"x\");\n"
             + "  }\n"
             + "}\n"))
         .issues(DiscardedSwiftWriteDetector.ISSUE)
