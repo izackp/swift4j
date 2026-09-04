@@ -28,6 +28,11 @@ rm -rf "$out"
 mkdir -p "$classes" "$java_src"
 
 echo "==> building fixture dylib"
+# SwiftPM does not reliably rebuild a target when only the macro plugin that
+# expands it changed, which silently leaves the dylib expanded from stale
+# codegen — the run then tests the previous macro. Touching the sources forces
+# re-expansion. Cheaper and safer than deleting build products.
+touch "$root"/Sources/Swift4jFixtures/*.swift
 swift build --product Swift4jFixtures
 swift build --product swift4j-cli
 
@@ -64,6 +69,15 @@ done
 echo "==> compiling Java"
 # The generated peers live in a directory literally named after the package, so
 # point javac at the sources rather than guessing a layout.
+# swift4j emits Kotlin, not Java, for payload enums (a sealed class per case),
+# so the generated peer set is mixed-language. This harness is javac-only, so
+# those are skipped and reported rather than silently dropped.
+kt_count=$(find "$java_src" -name '*.kt' | wc -l | tr -d ' ')
+if [ "$kt_count" != "0" ]; then
+    echo "    skipping $kt_count Kotlin peer(s); javac cannot compile them:"
+    find "$java_src" -name '*.kt' -exec basename {} \; | sed 's/^/      /'
+fi
+
 find "$java_src" -name '*.java' > "$out/sources.txt"
 find "$out/stubs" -name '*.java' >> "$out/sources.txt"
 find "$root/Sources/Swift4j/java" -name '*.java' >> "$out/sources.txt"

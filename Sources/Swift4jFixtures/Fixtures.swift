@@ -14,7 +14,7 @@ import Swift4jHostMacros
 /// has a second overload for types that are merely `JObjectConvertible`.
 
 @jvm
-public struct Leaf {
+public struct Leaf: Hashable {
   public var label: String
   public var count: Int
 
@@ -111,6 +111,68 @@ public struct Lossy {
     self.leaf = leaf
     self.maybe = maybe
     self.leaves = leaves
+  }
+}
+
+/// Holds one of each kind so `copy()`'s depth can be observed: whether a nested
+/// *value* detaches, and whether a nested *reference* stays shared.
+@jvm
+public struct Mixed {
+  public var leaf: Leaf
+  public var holder: Holder
+
+  public init(leaf: Leaf, holder: Holder) {
+    self.leaf = leaf
+    self.holder = holder
+  }
+}
+
+/// Counts its own observer firings, so a test can tell whether a write through
+/// the bridge went through the property's setter or around it.
+@jvm
+public struct Observing {
+  public var observerRuns: Int
+  public var leaf: Leaf {
+    didSet { observerRuns += 1 }
+  }
+
+  public init(leaf: Leaf) {
+    self.observerRuns = 0
+    self.leaf = leaf
+  }
+}
+
+/// Simple enum: no associated values, so it bridges by ordinal rather than by
+/// pointer box.
+@jvm
+public enum Color {
+  case red
+  case blue
+}
+
+/// Payload enum: its peer is a sealed hierarchy with a per-case factory, which
+/// is why a pointer alone cannot say which case it holds.
+@jvm
+public enum Shape {
+  case circle(radius: Int)
+  case square(side: Int)
+}
+
+/// Enum-typed property, to see what a getter/setter looks like and whether it
+/// can be scoped.
+///
+/// Only the simple enum is a property here. A payload-enum property would make
+/// this file reference `Shape`, whose peer swift4j emits as **Kotlin**
+/// (`Shape.kt`, a sealed class) while everything else is Java — so `javac`
+/// alone cannot compile the peer set. `Shape` stays declared above because the
+/// fixture target still type-checks its expansion; only the JVM harness has to
+/// skip it.
+@jvm
+public struct Shaped {
+  public var color: Color
+
+  public init(color: Color) {
+    self.color = color
   }
 }
 
