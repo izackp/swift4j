@@ -89,7 +89,9 @@ fileprivate static let deinit_jni: deinit_jni_t = { _, _, ptr in
 }
 """
 
-    let copyDecls =
+    // Structs only. Nothing registers this for an enum, so emitting it there
+    // would be a dead symbol; see the copyNatives gate in JvmTypeDeclSyntax.
+    let copyDecls = self is StructDeclSyntax ?
 """
 fileprivate typealias copy_jni_t = @convention(c)(UnsafeMutablePointer<JNIEnv>, JavaObject?, JavaLong) -> JavaLong
 fileprivate static let copy_jni: copy_jni_t = { _, _, ptr in
@@ -98,7 +100,7 @@ fileprivate static let copy_jni: copy_jni_t = { _, _, ptr in
   dst.initialize(to: src.pointee)
   return JavaLong(Int(bitPattern: dst))
 }
-"""
+""" : ""
 
     return
 """

@@ -73,7 +73,7 @@ public class BridgeIntegrationTest {
 
     section("enums");
     simpleEnumPropertyRoundTrips();
-    payloadEnumPeerIsKotlinSoItIsNotCoveredHere();
+    payloadEnumPropertyIsCoveredInKotlin();
 
     section("lifetime");
     aFetchedCopyOutlivesItsOwner();
@@ -339,7 +339,7 @@ public class BridgeIntegrationTest {
   // ---- enums ----
 
   private static void simpleEnumPropertyRoundTrips() {
-    Shaped shaped = new Shaped(Color.red);
+    Shaped shaped = new Shaped(Color.red, new Swift4jFixtures.Shape.circle(1));
     check("simple enum reads back", shaped.getColor() == Color.red);
 
     shaped.setColor(Color.blue);
@@ -347,12 +347,15 @@ public class BridgeIntegrationTest {
   }
 
   /**
-   * Not a check, a recorded limitation: a payload enum's peer is emitted as
-   * Kotlin (a sealed class), so this javac-only harness cannot compile it and
-   * the case goes untested here.
+   * A payload enum's peer is a Kotlin sealed class, so its own scenarios live
+   * in PayloadEnumTest.kt. What is checkable from Java is the property's shape.
    */
-  private static void payloadEnumPeerIsKotlinSoItIsNotCoveredHere() {
-    note("payload enum peer is Kotlin (Shape.kt); not covered by this harness");
+  private static void payloadEnumPropertyIsCoveredInKotlin() {
+    check("payload enum property exposes no scope",
+          !hasMethod(Shaped.class, "unsafeWithShape"));
+    check("payload enum property still declares its native",
+          hasDeclaredMethod(Shaped.class, "unsafeWithShapeImpl"));
+    note("payload enum behaviour is covered by PayloadEnumTest.kt");
   }
 
   // ---- lifetime ----

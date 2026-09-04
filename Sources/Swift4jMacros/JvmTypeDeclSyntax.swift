@@ -264,9 +264,16 @@ extension JvmTypeDeclSyntax {
 
     let deinitNatives = [ expandCreateNativeMethod(name: "deinit", sig: "(J)V", fn: "\(fqn).deinit_jni")]
 
-    // Value types only: a class's Java peer already refers to one Swift object,
-    // so `copy()` there would mean something else entirely.
-    let copyNatives: [String] = self is any JvmValueTypeDeclSyntax
+    // Structs only, matching ClassGenerator, which emits `copy()` for exactly
+    // that. A class's peer already refers to one Swift object, so copying it
+    // would mean something else; a payload enum's peer is a Kotlin sealed
+    // class that declares no `copyImpl` at all.
+    //
+    // This previously read `self is any JvmValueTypeDeclSyntax`, which is true
+    // for enums too. Registering a native the peer does not declare fails the
+    // whole RegisterNatives batch, so every native on every payload enum was
+    // unbound and threw on first use.
+    let copyNatives: [String] = self is StructDeclSyntax
       ? [expandCreateNativeMethod(name: "copyImpl", sig: "(J)J", fn: "\(fqn).copy_jni")]
       : []
 

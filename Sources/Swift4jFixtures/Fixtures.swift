@@ -158,21 +158,20 @@ public enum Shape {
   case square(side: Int)
 }
 
-/// Enum-typed property, to see what a getter/setter looks like and whether it
-/// can be scoped.
+/// Enum-typed properties, to see what a getter/setter looks like for each kind
+/// and whether either can be scoped.
 ///
-/// Only the simple enum is a property here. A payload-enum property would make
-/// this file reference `Shape`, whose peer swift4j emits as **Kotlin**
-/// (`Shape.kt`, a sealed class) while everything else is Java — so `javac`
-/// alone cannot compile the peer set. `Shape` stays declared above because the
-/// fixture target still type-checks its expansion; only the JVM harness has to
-/// skip it.
+/// `shape` makes this file reference `Shape`, whose peer swift4j emits as
+/// **Kotlin** (`Shape.kt`, a sealed class) while everything else is Java. The
+/// harness therefore has to compile Kotlin before Java.
 @jvm
 public struct Shaped {
   public var color: Color
+  public var shape: Shape
 
-  public init(color: Color) {
+  public init(color: Color, shape: Shape) {
     self.color = color
+    self.shape = shape
   }
 }
 
