@@ -711,3 +711,109 @@ still nest, and the flag is only emitted for types that expose a scope.
 `DangerTest` now runs four scenarios, all expected to survive: `race-root`
 (plain accessors), `race` (scope versus reader), `escape` (view outliving its
 scope), `nest`. Each was verified against a build with its guard removed.
+
+
+## D9: scoped borrow for optional properties
+
+`var maybe: Leaf?` gets no `unsafeWith`, so the copying getter is the only
+access and every write through it is lost. Unlike a plain struct property there
+is no alternative to reach for, which is what makes this worse than the pinned
+getter defect rather than an instance of it.
+
+The rule excludes it because `Optional<T>` is not laid out as `T`. For a struct
+with spare bits the payload often does sit at offset zero, but "often" is not a
+layout guarantee and reading it as one is the kind of assumption that survives
+testing and fails on another architecture.
+
+So do not point into the optional. Unwrap, borrow the local, write back:
+
+    guard var unwrapped = value else { return }
+    withUnsafeMutablePointer(to: &unwrapped) { … }
+    value = unwrapped
+
+This is a copy in and a copy out, so it is not a borrow in the strict sense.
+It is still the right trade: the cost is one copy per *scope*, not per property
+read, and the scope is the deliberate-edit path where a copy was never the
+problem. Writes land, which is the whole point.
+
+Semantics: `nil` runs the body zero times, matching `if let`. Whether the Java
+wrapper should return a boolean saying whether it ran is open — it costs
+nothing and callers otherwise cannot distinguish "absent" from "present and
+unchanged".
+
+Both generators need the syntactic rule widened to admit an `OptionalTypeSyntax`
+whose wrapped type is itself borrowable, and they must widen identically (R2).
+The CLI exposes the public wrapper only where the wrapped type resolves to a
+`@jvm` struct, as it already does for the non-optional case.
+
+Carries one hazard that the in-place version does not: the write-back happens
+after the body returns, so anything the body does that reads the property back
+through the owner sees the stale value. D11 addresses that.
+
+
+## D10: unsafeForEach for array properties
+
+`var leaves: [Leaf]` boxes an owned copy per element, so an element write never
+reaches the array. G3, still open, and again with no alternative to reach for.
+
+Unlike the optional case a real borrow is available:
+
+    self.leaves.withUnsafeMutableBufferPointer { buf in
+      for i in buf.indices {
+        // hand Java a peer over buf.baseAddress! + i
+      }
+    }
+
+Zero copy, writes land in place, and element addresses are stable for the
+duration. The Java side yields `Leaf.Borrowed` per element, invalidated after
+each iteration rather than at the end, so a view cannot outlive its element.
+
+The problem is `withUnsafeMutableBufferPointer`'s own contract: it moves the
+buffer out of the array for the duration, and touching the original array
+inside the closure is undefined. If the callback calls `box.getLeaves()` this
+is UB, not merely wrong — the same class of defect as the escaping-buffer idea
+rejected earlier in this document. The difference is that this one is
+conditional on re-entry rather than unconditional, which makes it fixable
+rather than disqualifying. It is only sound with D11.
+
+Dictionaries are not in scope. Values in a `Dictionary` have no stable
+addresses across the call, so there is no equivalent to borrow.
+
+
+## D11: seal the peer for the duration of a scope
+
+D9 can hand back stale reads and D10 is undefined behaviour, both for the same
+reason: the callback can reach the owner through its ordinary accessors while a
+scope is open.
+
+`_inScope` already exists and already rejects a nested scope on the same peer.
+Extending the same check to the plain accessors closes both:
+
+    synchronized (_ptr) {
+      if (_inScope) throw new IllegalStateException(…);
+      …
+    }
+
+Cost is a boolean read under a monitor already held. The check is deterministic
+on caller code, not timing-dependent, which is the R8 line the nesting guard
+already sits on — it cannot pass in testing and fail under load.
+
+It does make `box.unsafeWithLeaf(l -> box.getTag())` illegal, which is a real
+restriction and will look arbitrary to anyone who has not read this section.
+It is the same rule the deadlock exposure already implies: inside a callback,
+touch only the view.
+
+Sequence matters. D11 lands first, or D10 ships UB.
+
+
+## Not planned
+
+The two pinned getter defects stay. `box.getLeaf().setLabel(x)` and
+`box.getLeaf().bump()` both write into a copy, and both have `unsafeWith` as a
+working alternative. Making the plain getter borrow instead was considered at
+length above and rejected: it pins the parent, and memory has to stay low.
+
+The orphaned `HashMap` key stays too. Java's contract already says a mutable
+key is undefined, so the bridge is not doing anything wrong. What it lacks is a
+way to say so — there is no immutable peer type to offer as a key, and no
+warning at the point of insertion.
