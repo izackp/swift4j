@@ -1049,3 +1049,56 @@ same win while keeping copy semantics everywhere.
 Separately: a single property read costs about a microsecond, which is high for
 what it does. Neither design explains that, and it is worth its own look before
 any more effort goes into shaving allocations off it.
+
+
+## What the app actually does — the hot path is not arrays
+
+Looked at CaptureAndroid rather than continuing to guess.
+
+`app/src/main/java/io/photoday/capture/captureapi/FullSubjectExt.kt:95`
+
+    val FullSubject.firstName: String?  get() = subject.server_data.firstName
+    val FullSubject.lastName: String?   get() = subject.server_data.lastName
+
+`FullSubject.subject` is a struct, `Subject.server_data` is a struct. So one
+`a.lastName` marshals **two boxes** — one per link in the chain — and then
+converts a String. From the measured parts that is roughly 700 + 700 + 300, so
+about 1.7 us per property read.
+
+`app/src/main/java/io/photoday/capture/activities/students/StudentsViewModel.kt:131`
+
+    filtered.sortedWith(
+        Comparator<FullSubject> { a, b -> ci.compare(a.lastName ?: "", b.lastName ?: "") }
+            .thenComparator { a, b -> ci.compare(a.firstName ?: "", b.firstName ?: "") }
+    )
+
+Four boxes per comparison, eight when the last names tie. At n=500 that is
+about 4500 comparisons, so 18000 to 36000 boxes for one sort — which is the
+figure this whole effort started from. `recompute()` is wired to six LiveData
+sources, so it is not once.
+
+**The array work was a detour.** Constant-time indexing is a real improvement
+and the numbers are dramatic, but nothing in this path indexes an array. The
+cost is nested struct property chains read repeatedly inside a comparator.
+
+### Caching is the right fix, and this is the evidence for it
+
+The same objects' same properties are read about log n times per sort, plus
+once per filter pass. Caching the marshalled peer per property — `subject` on
+the `FullSubject` peer, `server_data` on the `Subject` peer — turns a sort from
+~36000 boxes into ~1000, one per object on first read. A cached read is three
+cheap crossings and a String conversion, roughly 350 ns against 1700 ns.
+
+The retention objection raised earlier was wrong, or at least backwards.
+Growth today is unbounded: every read allocates. A cache bounds it to one box
+per property per peer. That is a ceiling, not an addition.
+
+These peers also suit it: they are read-only snapshots pulled from the database
+into `_rawSubjects`, and writes go through separate paths entirely.
+
+### Also available: an app-side fix that needs no bridge change
+
+Decorate-sort-undecorate. Read each key once into a Kotlin object, sort on
+that, discard. About 1000 reads instead of 36000, independent of anything here.
+Not a substitute for fixing the bridge, but it is available today and it is
+larger than any single bridge change measured so far.
