@@ -817,3 +817,40 @@ The orphaned `HashMap` key stays too. Java's contract already says a mutable
 key is undefined, so the bridge is not doing anything wrong. What it lacks is a
 way to say so — there is no immutable peer type to offer as a key, and no
 warning at the point of insertion.
+
+### D9 corrected: it is a real borrow, verified
+
+The copy-in / write-back design above was wrong, and wrong for a reason worth
+keeping: `unsafeWith` exists to avoid the copy, not to make writes land. A
+scope that copies in and out is no cheaper than the getter for a read, so it
+would have failed at the thing the API is for. "One copy per scope is fine"
+was an answer to the wrong question.
+
+Force-unwrap is an lvalue, and `&self.maybe!` addresses the payload in place.
+Measured on a stored optional in a struct:
+
+- a write through the pointer reaches the original
+- the address is stable across separate borrows
+- the payload lies inside the owner's own storage, at offset 0 here
+
+So D9 is a genuine borrow with no copy on either side, the same as the
+non-optional case. `nil` still needs a guard first, since force-unwrapping it
+traps.
+
+### Re-entrancy is silent through the bridge, which is why D11 is required
+
+Reading the owner while a scope is open traps under Swift's dynamic
+exclusivity enforcement — "Simultaneous accesses … modification requires
+exclusive access" — for both the optional borrow and the array buffer. That
+sounds like the language already covers this.
+
+It does not. Enforcement applies to accesses Swift can track. The bridge holds
+every value in a malloc'd box reached only through
+`UnsafeMutablePointer.pointee`, and that path is not instrumented. The same two
+re-entrant reads, through a pointer instead of a variable, ran to completion
+with no trap and no diagnostic — including the array case, where the array is
+moved out for the duration and reading it is undefined.
+
+So the failure mode through the bridge is silent UB, not a crash. D11 is not
+defence in depth; it is the only thing standing between D10 and undefined
+behaviour, and it has to land first.
