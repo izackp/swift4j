@@ -113,21 +113,55 @@ find "$java_src" -name '*.java' > "$out/sources.txt"
 find "$out/stubs" -name '*.java' >> "$out/sources.txt"
 find "$root/Sources/Swift4j/java" -name '*.java' >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/BridgeIntegrationTest.java" >> "$out/sources.txt"
+echo "$root/Tests/JvmIntegration/DangerTest.java" >> "$out/sources.txt"
 
 "$JAVA_HOME/bin/javac" -nowarn -cp "$classes" -d "$classes" @"$out/sources.txt"
 
 runtime_cp="$classes"
 [ "$kotlin_ok" = "1" ] && [ -f "$KOTLIN_STDLIB" ] && runtime_cp="$classes:$KOTLIN_STDLIB"
 
+# Every suite runs even when an earlier one fails: a known defect must not hide
+# a regression in a later section.
+status=0
+
 echo "==> running"
 "$JAVA_HOME/bin/java" \
     -Djava.library.path="$libdir" \
     -cp "$runtime_cp" \
-    BridgeIntegrationTest
+    BridgeIntegrationTest || status=1
 
 if [ "$kt_count" != "0" ] && [ "$kotlin_ok" = "1" ]; then
     "$JAVA_HOME/bin/java" \
         -Djava.library.path="$libdir" \
         -cp "$runtime_cp" \
-        PayloadEnumTest
+        PayloadEnumTest || status=1
 fi
+
+# Memory-safety hazards. These can take the JVM down rather than fail an
+# assertion — a Java data race yields a wrong value, a race on Swift storage
+# yields SIGSEGV — so each runs in its own process and is reported by how it
+# died. A clean run is not proof of safety; these are probabilistic.
+echo
+echo "==> dangers"
+for scenario in race escape; do
+    echo "  $scenario:"
+    set +e
+    # A crash here is expected, so keep the JVM's dump out of the repo root and
+    # inside the build dir, which the next run clears.
+    "$JAVA_HOME/bin/java" \
+        -XX:ErrorFile="$out/hs_err_%p.log" \
+        -Djava.library.path="$libdir" \
+        -cp "$runtime_cp" \
+        DangerTest "$scenario" 2>&1 | sed 's/^/  /'
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -gt 128 ]; then
+        echo "    CRASHED with signal $((rc - 128)) -- hazard demonstrated"
+        status=1
+    elif [ "$rc" != "0" ]; then
+        echo "    exited $rc -- hazard demonstrated"
+        status=1
+    fi
+done
+
+exit $status

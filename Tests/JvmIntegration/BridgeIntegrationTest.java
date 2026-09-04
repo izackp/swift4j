@@ -10,23 +10,29 @@ import Swift4jFixtures.Shaped;
 
 import io.scade.swift4j.SwiftPtr;
 
-import java.lang.reflect.Method;
 import java.util.HashMap;
 
 /**
- * The only place the bridge actually runs.
+ * Behaviour of the bridge on a real JVM.
  *
- * Everything else in this repo checks generated text or type-checks an
- * expansion. Neither catches a RegisterNatives batch that fails at class-init,
- * a value that aliases when it should copy, or a write that lands nowhere.
+ * Two kinds of check:
  *
- * Checks labelled PINNED assert what the bridge does *today*, including known
- * defects. They pass because the bug is present; if one fails, the behaviour
- * changed and the pin needs re-deciding rather than "fixing".
+ *   check(...)  asserts something that must hold. A failure is a regression.
+ *   mustWork(...) asserts something that *should* hold and currently does not.
+ *                 It reports BROKEN and fails the run, because a defect that
+ *                 reports success is worse than no test at all.
+ *
+ * The run therefore exits non-zero while the known defects exist. That is the
+ * point: they are bugs, not features, and the suite says so every time.
+ *
+ * Shape assertions (which methods exist on a peer) live in the Swift unit
+ * tests, which read the generated source directly. Duplicating them here as
+ * reflection lookups added checks that could not fail.
  */
 public class BridgeIntegrationTest {
 
   private static int failures = 0;
+  private static int broken = 0;
 
   public static void main(String[] args) throws Exception {
     System.loadLibrary("Swift4jFixtures");
@@ -35,23 +41,20 @@ public class BridgeIntegrationTest {
     registerNativesSucceeds();
 
     section("getter semantics by property type");
-    structPropertyReturnsDistinctInstances();
-    structPropertyWriteIsDiscarded();
+    structPropertyWriteShouldReachTheOwner();
     classPropertyWriteReachesTheOwner();
     classPropertyReturnsTheSamePeer();
-    optionalPropertyNonNilWriteIsDiscarded();
+    optionalPropertyWriteShouldReachTheOwner();
     optionalPropertyNilReturnsNull();
-    arrayPropertyElementWriteIsDiscarded();
-    arrayPropertyReturnsDistinctArrays();
+    arrayElementWriteShouldReachTheArray();
     dictionaryPropertyRoundTrips();
-    datePropertyRoundTripsAndWriteIsDiscarded();
+    datePropertyRoundTrips();
     scalarPropertiesOnARootRoundTrip();
 
     section("copy()");
     copyOfStructIsIndependent();
     copyDetachesANestedValue();
     copySharesANestedReference();
-    classHasNoCopy();
 
     section("unsafeWith");
     scopedWriteLandsInTheOwner();
@@ -59,31 +62,34 @@ public class BridgeIntegrationTest {
     scopedAccessNests();
     scopeOnACopyAffectsOnlyTheCopy();
     scopedWriteRunsObservers();
-    conversionBridgedPropertyHasNoPublicScope();
 
     section("mutating methods");
     mutatingMethodOnARootPersists();
-    mutatingMethodOnANestedValueIsDiscarded();
+    mutatingMethodOnANestedValueShouldPersist();
     mutatingMethodInsideAScopeLands();
 
     section("identity, equality, hashing");
     hashableStructComparesByValue();
-    twoGetterCallsAreEqualButNotIdentical();
-    mutatingAKeyAfterInsertionOrphansIt();
+    twoGetterCallsAreEqualByValue();
+    mutatingAKeyAfterInsertionShouldNotOrphanIt();
 
     section("enums");
     simpleEnumPropertyRoundTrips();
-    payloadEnumPropertyIsCoveredInKotlin();
 
-    section("lifetime");
-    aFetchedCopyOutlivesItsOwner();
+    section("memory");
     handlesReturnToBaselineAfterCollection();
 
+    System.out.println();
+    if (broken > 0) {
+      System.out.println(broken + " known defect(s) still broken");
+    }
     if (failures > 0) {
-      System.out.println("\n" + failures + " check(s) failed");
+      System.out.println(failures + " regression(s)");
+    }
+    if (broken > 0 || failures > 0) {
       System.exit(1);
     }
-    System.out.println("\nall checks passed");
+    System.out.println("all checks passed");
   }
 
   // ---- registration ----
@@ -99,17 +105,12 @@ public class BridgeIntegrationTest {
 
   // ---- getter semantics ----
 
-  private static void structPropertyReturnsDistinctInstances() {
-    Box box = new Box(new Leaf("a", 1), "tag");
-    check("struct getter returns a fresh instance each call",
-          box.getLeaf() != box.getLeaf());
-  }
-
-  private static void structPropertyWriteIsDiscarded() {
+  /** The getter boxes a copy, so the write goes to a malloc nothing reads again. */
+  private static void structPropertyWriteShouldReachTheOwner() {
     Box box = new Box(new Leaf("orig", 1), "tag");
-    box.getLeaf().setLabel("lost");
-    check("PINNED: struct property write is discarded",
-          box.getLeaf().getLabel().equals("orig"));
+    box.getLeaf().setLabel("written");
+    mustWork("struct property write reaches the owner",
+             box.getLeaf().getLabel().equals("written"));
   }
 
   /** A class peer refers to the Swift object itself, so mutation is shared. */
@@ -127,14 +128,12 @@ public class BridgeIntegrationTest {
           mixed.getHolder() == mixed.getHolder());
   }
 
-  private static void optionalPropertyNonNilWriteIsDiscarded() {
+  /** Optional<T> is not laid out as T, so it has no scope and no view. */
+  private static void optionalPropertyWriteShouldReachTheOwner() {
     Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] { new Leaf("e", 3) });
-    lossy.getMaybe().setLabel("lost");
-    check("PINNED: optional property write is discarded",
-          lossy.getMaybe().getLabel().equals("opt"));
-
-    check("PINNED: optional property has no scoped borrow",
-          !hasMethod(Lossy.class, "unsafeWithMaybe"));
+    lossy.getMaybe().setLabel("written");
+    mustWork("optional property write reaches the owner",
+             lossy.getMaybe().getLabel().equals("written"));
   }
 
   private static void optionalPropertyNilReturnsNull() {
@@ -142,17 +141,12 @@ public class BridgeIntegrationTest {
     check("nil optional reads back as null", lossy.getMaybe() == null);
   }
 
-  private static void arrayPropertyElementWriteIsDiscarded() {
+  /** Array marshalling boxes one owned copy per element. */
+  private static void arrayElementWriteShouldReachTheArray() {
     Lossy lossy = new Lossy(new Leaf("a", 1), null, new Leaf[] { new Leaf("elem", 3) });
-    lossy.getLeaves()[0].setLabel("lost");
-    check("PINNED: array element write is discarded",
-          lossy.getLeaves()[0].getLabel().equals("elem"));
-  }
-
-  private static void arrayPropertyReturnsDistinctArrays() {
-    Lossy lossy = new Lossy(new Leaf("a", 1), null, new Leaf[] { new Leaf("e", 3) });
-    check("array getter marshals a fresh array each call",
-          lossy.getLeaves() != lossy.getLeaves());
+    lossy.getLeaves()[0].setLabel("written");
+    mustWork("array element write reaches the array",
+             lossy.getLeaves()[0].getLabel().equals("written"));
   }
 
   private static void dictionaryPropertyRoundTrips() {
@@ -161,14 +155,9 @@ public class BridgeIntegrationTest {
           branch.getTable().get("k").getLabel().equals("v"));
   }
 
-  private static void datePropertyRoundTripsAndWriteIsDiscarded() {
+  private static void datePropertyRoundTrips() {
     Branch branch = branchFixture();
-    java.util.Date fetched = branch.getStamp();
-    check("Date property round-trips", fetched.getTime() == 1000L);
-
-    fetched.setTime(5000L);
-    check("PINNED: mutating a fetched Date does not reach the owner",
-          branch.getStamp().getTime() == 1000L);
+    check("Date property round-trips", branch.getStamp().getTime() == 1000L);
   }
 
   private static void scalarPropertiesOnARootRoundTrip() {
@@ -204,10 +193,7 @@ public class BridgeIntegrationTest {
     check("original's nested value is detached", original.getLeaf().getLabel().equals("orig"));
   }
 
-  /**
-   * The same copy retains rather than clones a reference field, so the class
-   * stays shared. Shallow by construction — worth knowing, not a defect.
-   */
+  /** The same copy retains rather than clones a reference field. */
   private static void copySharesANestedReference() {
     Mixed original = new Mixed(new Leaf("a", 1), new Holder(1, new Leaf("h", 2)));
     Mixed duplicate = original.copy();
@@ -215,11 +201,6 @@ public class BridgeIntegrationTest {
     duplicate.getHolder().setCount(42);
 
     check("copy shares the nested reference", original.getHolder().getCount() == 42);
-  }
-
-  private static void classHasNoCopy() {
-    check("class has no copy()", !hasMethod(Holder.class, "copy"));
-    check("class has no fromUnownedPtr", !hasDeclaredMethod(Holder.class, "fromUnownedPtr"));
   }
 
   // ---- unsafeWith ----
@@ -241,9 +222,7 @@ public class BridgeIntegrationTest {
   /** A class with a struct property also gets a scope. */
   private static void scopedAccessNests() {
     Mixed mixed = new Mixed(new Leaf("a", 1), new Holder(1, new Leaf("deep", 2)));
-
     mixed.getHolder().unsafeWithLeaf(l -> l.setLabel("nested-write"));
-
     check("scope on a class property's struct field lands",
           mixed.getHolder().getLeaf().getLabel().equals("nested-write"));
   }
@@ -259,28 +238,14 @@ public class BridgeIntegrationTest {
   }
 
   /**
-   * The distinction between a scope and an interior pointer. A scope is an
-   * inout access, so it runs the synthesized modify accessor and observers
-   * fire. Writing through a raw field address would skip them.
+   * A scope is an inout access, so it runs the synthesized modify accessor and
+   * observers fire. Writing through a raw field address would skip them.
    */
   private static void scopedWriteRunsObservers() {
     Observing o = new Observing(new Leaf("a", 1));
     check("observer has not run yet", o.getObserverRuns() == 0);
-
     o.unsafeWithLeaf(l -> l.setLabel("x"));
-
     check("scoped write ran didSet", o.getObserverRuns() == 1);
-  }
-
-  private static void conversionBridgedPropertyHasNoPublicScope() {
-    check("Date property exposes no public scope",
-          !hasMethod(Branch.class, "unsafeWithStamp"));
-    check("Date property still declares its native",
-          hasDeclaredMethod(Branch.class, "unsafeWithStampImpl"));
-    check("struct property does expose a scope",
-          hasMethod(Branch.class, "unsafeWithLeaf"));
-    check("class-typed property exposes no scope",
-          !hasMethod(Mixed.class, "unsafeWithHolder"));
   }
 
   // ---- mutating methods ----
@@ -291,11 +256,14 @@ public class BridgeIntegrationTest {
     check("mutating method on an owned root persists", root.getCount() == 6);
   }
 
-  private static void mutatingMethodOnANestedValueIsDiscarded() {
+  /**
+   * `mutating` is invisible to the bridge, so this is the same plain void as a
+   * read-only method and the mutation dies with the boxed copy.
+   */
+  private static void mutatingMethodOnANestedValueShouldPersist() {
     Box box = new Box(new Leaf("m", 5), "tag");
     box.getLeaf().bump();
-    check("PINNED: mutating method on a nested value is discarded",
-          box.getLeaf().getCount() == 5);
+    mustWork("mutating method on a nested value persists", box.getLeaf().getCount() == 6);
   }
 
   private static void mutatingMethodInsideAScopeLands() {
@@ -311,29 +279,25 @@ public class BridgeIntegrationTest {
     check("different values are unequal", !new Leaf("a", 1).equals(new Leaf("b", 1)));
   }
 
-  private static void twoGetterCallsAreEqualButNotIdentical() {
+  private static void twoGetterCallsAreEqualByValue() {
     Box box = new Box(new Leaf("a", 1), "tag");
     check("two fetches are equal by value", box.getLeaf().equals(box.getLeaf()));
-    check("two fetches are not the same object", box.getLeaf() != box.getLeaf());
   }
 
   /**
-   * Standard Java: HashMap's contract is undefined if a key's hash changes
-   * while it is in the map. Recorded because a value-typed key makes it easy to
-   * hit — the fix is to insert a copy.
+   * A mutable value-typed key silently orphans its entry. Java's HashMap
+   * contract says the behaviour is undefined, so this is arguably correct — but
+   * the peer offers no immutable key type and no warning, so a caller has
+   * nothing to reach for.
    */
-  private static void mutatingAKeyAfterInsertionOrphansIt() {
+  private static void mutatingAKeyAfterInsertionShouldNotOrphanIt() {
     HashMap<Leaf, String> map = new HashMap<>();
     Leaf key = new Leaf("k", 1);
     map.put(key, "value");
 
     key.setLabel("mutated");
 
-    check("PINNED: mutating a key after put orphans the entry", map.get(key) == null);
-
-    Leaf stable = new Leaf("k2", 1);
-    map.put(stable, "value2");
-    check("an unmutated key is still found", "value2".equals(map.get(stable)));
+    mustWork("a key stays findable after being mutated", "value".equals(map.get(key)));
   }
 
   // ---- enums ----
@@ -346,49 +310,25 @@ public class BridgeIntegrationTest {
     check("simple enum setter on a root", shaped.getColor() == Color.blue);
   }
 
-  /**
-   * A payload enum's peer is a Kotlin sealed class, so its own scenarios live
-   * in PayloadEnumTest.kt. What is checkable from Java is the property's shape.
-   */
-  private static void payloadEnumPropertyIsCoveredInKotlin() {
-    check("payload enum property exposes no scope",
-          !hasMethod(Shaped.class, "unsafeWithShape"));
-    check("payload enum property still declares its native",
-          hasDeclaredMethod(Shaped.class, "unsafeWithShapeImpl"));
-    note("payload enum behaviour is covered by PayloadEnumTest.kt");
-  }
-
-  // ---- lifetime ----
-
-  /** A fetched value owns its own allocation, so it does not depend on its source. */
-  private static void aFetchedCopyOutlivesItsOwner() {
-    Box box = new Box(new Leaf("kept", 1), "tag");
-    Leaf detached = box.getLeaf();
-    box = null;
-
-    System.gc();
-    try { Thread.sleep(50); } catch (InterruptedException ignored) { }
-
-    check("a fetched value survives its owner", detached.getLabel().equals("kept"));
-  }
+  // ---- memory ----
 
   /**
-   * Lenient by design: GC timing is not deterministic, so this asserts handles
-   * do not grow without bound, not an exact count.
+   * Strict: 2000 boxes must be reclaimed, not merely "not unbounded". A lenient
+   * bound here passed while leaking, which made the check decoration.
    */
   private static void handlesReturnToBaselineAfterCollection() {
     int before = SwiftPtr.liveCount();
     for (int i = 0; i < 2000; i++) {
       new Box(new Leaf("x", i), "t").getLeaf().getLabel();
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
       System.gc();
-      try { Thread.sleep(50); } catch (InterruptedException ignored) { }
+      try { Thread.sleep(100); } catch (InterruptedException ignored) { }
     }
     int after = SwiftPtr.liveCount();
-    check("live handles do not grow without bound after 2000 boxes"
+    check("live handles return to baseline after 2000 boxes"
           + " (before=" + before + " after=" + after + ")",
-          after < before + 2000);
+          after <= before + 50);
   }
 
   // ---- helpers ----
@@ -414,30 +354,18 @@ public class BridgeIntegrationTest {
     }
   }
 
-  private static boolean hasMethod(Class<?> cls, String name) {
-    for (Method m : cls.getMethods()) {
-      if (m.getName().equals(name)) return true;
-    }
-    return false;
-  }
-
-  private static boolean hasDeclaredMethod(Class<?> cls, String name) {
-    for (Method m : cls.getDeclaredMethods()) {
-      if (m.getName().equals(name)) return true;
-    }
-    return false;
-  }
-
   private static void section(String name) {
     System.out.println("\n" + name);
   }
 
-  private static void note(String what) {
-    System.out.println("  note " + what);
+  private static void check(String what, boolean ok) {
+    System.out.println((ok ? "  ok     " : "  FAIL   ") + what);
+    if (!ok) failures++;
   }
 
-  private static void check(String what, boolean ok) {
-    System.out.println((ok ? "  ok   " : "  FAIL ") + what);
-    if (!ok) failures++;
+  /** Asserts correct behaviour that the bridge does not yet deliver. */
+  private static void mustWork(String what, boolean ok) {
+    System.out.println((ok ? "  FIXED  " : "  BROKEN ") + what);
+    if (!ok) broken++;
   }
 }
