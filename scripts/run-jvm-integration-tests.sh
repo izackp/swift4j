@@ -147,7 +147,7 @@ echo "==> dangers"
 # All four are covered now -- the peer lock for plain accessors and for scopes,
 # the Borrowed guard for escapes, the _inScope flag for nesting -- so any of
 # them dying is a regression, not a demonstration.
-for scenario in race-root race escape nest; do
+for scenario in race-root race escape nest seal; do
     echo "  $scenario:"
     set +e
     # A crash here is expected, so keep the JVM's dump out of the repo root and

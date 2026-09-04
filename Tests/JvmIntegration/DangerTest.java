@@ -29,6 +29,7 @@ public class DangerTest {
       case "race": crossThreadMutation(); break;
       case "escape": escapedBorrow(); break;
       case "nest": nestedScope(); break;
+      case "seal": sealedDuringScope(); break;
       default:
         System.out.println("unknown scenario: " + scenario);
         System.exit(2);
@@ -192,6 +193,53 @@ public class DangerTest {
    *
    * A scope on a *different* peer must still work, or the guard is too broad.
    */
+  /**
+   * Reading the owner through an ordinary accessor while its scope is open.
+   *
+   * Swift holds an exclusive access to the owner's storage for the duration of
+   * the scope, so this read is a conflict. Swift's own dynamic exclusivity
+   * enforcement catches it — but only for accesses it can track, and every
+   * value here lives in a malloc'd box reached through
+   * UnsafeMutablePointer.pointee, which is not instrumented. Measured: the same
+   * re-entrant read runs to completion with no trap and no diagnostic.
+   *
+   * So the peer refuses it instead.
+   */
+  private static void sealedDuringScope() {
+    Box box = new Box(new Leaf("a", 1), "tag");
+
+    final String[] seen = new String[1];
+    box.unsafeWithLeaf(l -> seen[0] = l.getLabel());
+    if (!"a".equals(seen[0])) {
+      System.out.println("  BROKEN: the view itself is not readable: " + seen[0]);
+      System.exit(1);
+    }
+    System.out.println("  view is readable inside the scope: \"" + seen[0] + "\"");
+
+    try {
+      box.unsafeWithLeaf(l -> box.getTag());
+      System.out.println("  BROKEN: read the owner through an accessor mid-scope");
+      System.exit(1);
+    } catch (IllegalStateException expected) {
+      System.out.println("  owner read rejected: " + expected.getMessage());
+    }
+
+    try {
+      box.unsafeWithLeaf(l -> box.setTag("x"));
+      System.out.println("  BROKEN: wrote the owner through an accessor mid-scope");
+      System.exit(1);
+    } catch (IllegalStateException expected) {
+      System.out.println("  owner write rejected");
+    }
+
+    // The seal lifts on the way out, including after a callback threw.
+    if (!"tag".equals(box.getTag())) {
+      System.out.println("  BROKEN: owner unreadable after the scope closed");
+      System.exit(1);
+    }
+    System.out.println("  owner readable again after the scope closed");
+  }
+
   private static void nestedScope() {
     Box box = new Box(new Leaf("a", 1), "tag");
     Box other = new Box(new Leaf("b", 2), "tag");

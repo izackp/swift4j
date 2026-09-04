@@ -30,9 +30,35 @@
 ///     Nothing on this side of the bridge is involved in that access.
 ///   - `async` methods. The call that launches the task is guarded; the work
 ///     it does after returning is not.
+/// The `sealed` half is a second, unrelated guard that shares the same monitor.
+///
+/// While an `unsafeWith` scope is open, Swift holds an exclusive access to the
+/// owner's storage. Reading it back through an ordinary accessor is a conflict,
+/// and in the array case `withUnsafeMutableBufferPointer` has moved the buffer
+/// out entirely, so the read is undefined rather than merely stale.
+///
+/// Swift's own dynamic exclusivity enforcement catches exactly this — but only
+/// for accesses it can track. Every value here lives in a malloc'd box reached
+/// through `UnsafeMutablePointer.pointee`, which is not instrumented: the same
+/// re-entrant read runs to completion with no trap and no diagnostic. So the
+/// check has to be made here.
+///
+/// Deterministic on caller code, not timing-dependent, which is the R8 line the
+/// nesting guard already sits on.
 enum PeerLock {
-  static func guarded(_ statement: String, locked: Bool) -> String {
+  static func guarded(_ statement: String,
+                      locked: Bool,
+                      sealed: Bool = false,
+                      owner: String = "") -> String {
     guard locked else { return "    " + statement }
-    return "    synchronized (_ptr) {\n      " + statement + "\n    }"
+
+    let seal = sealed
+      ? "      if (_inScope) {\n"
+        + "        throw new IllegalStateException(\n"
+        + "          \"\(owner) is inside an unsafeWith scope; the callback may only touch the view\");\n"
+        + "      }\n"
+      : ""
+
+    return "    synchronized (_ptr) {\n" + seal + "      " + statement + "\n    }"
   }
 }

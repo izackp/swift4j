@@ -30,11 +30,11 @@ class VarGenerator {
     self.registry = registry
   }
 
-  func generate(with ctx: inout Context) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
     return varDecl.decls.map {
 """
-\(generateGetter(from: $0, with: &ctx))
-\($0.readonly ? "" : generateSetter(from: $0, with: &ctx))
+\(generateGetter(from: $0, with: &ctx, sealed: sealed))
+\($0.readonly ? "" : generateSetter(from: $0, with: &ctx, sealed: sealed))
 \($0.observable(varDecl) && observationTracking ? generateGetterWithObservationTracking(from: $0, with: &ctx) : "")
 \(generateScopedBorrow(from: $0, with: &ctx))
 """
@@ -174,7 +174,7 @@ class VarGenerator {
     }.joined(separator: "\n")
   }
 
-  private func generateGetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+  private func generateGetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
     let name = "get\(decl.capitalizedName)"
     let retType = decl.type.map(with: &ctx)
 
@@ -191,7 +191,9 @@ class VarGenerator {
     }
 
     let call = PeerLock.guarded("return \(callee).\(name)Impl(\(implParam));",
-                                locked: !varDecl.isStatic)
+                                locked: !varDecl.isStatic,
+                                sealed: sealed,
+                                owner: "\(className).\(name)")
 
     return
 """
@@ -202,7 +204,7 @@ class VarGenerator {
 """
   }
 
-  private func generateSetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context) -> String {
+  private func generateSetter(from decl: VariableDeclSyntax.VarDecl, with ctx: inout Context, sealed: Bool) -> String {
     let name = "set\(decl.capitalizedName)"
     let valType = decl.type.map(with: &ctx)
 
@@ -219,7 +221,9 @@ class VarGenerator {
     }
 
     let call = PeerLock.guarded("\(callee).\(name)Impl(\(implParam));",
-                                locked: !varDecl.isStatic)
+                                locked: !varDecl.isStatic,
+                                sealed: sealed,
+                                owner: "\(className).\(name)")
 
     return
 """

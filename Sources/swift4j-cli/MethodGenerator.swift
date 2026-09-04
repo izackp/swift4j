@@ -54,7 +54,7 @@ class MethodGenerator {
 """
   }
 
-  func generate(with ctx: inout Context) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false) -> String {
     let params = funcDecl.signature.paramsMapping(with: &ctx)
 
     // Async funcs return CompletableFuture<T>. Java generics cannot use
@@ -84,7 +84,9 @@ class MethodGenerator {
 
 
     let guarded = PeerLock.guarded("\(call);",
-                                   locked: !funcDecl.isStatic && !takesClosure)
+                                   locked: !funcDecl.isStatic && !takesClosure,
+                                   sealed: sealed,
+                                   owner: "\(className).\(name)")
 
     return
 """

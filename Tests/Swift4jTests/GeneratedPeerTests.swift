@@ -183,6 +183,23 @@ final class GeneratedPeerTests: XCTestCase {
                   "the flag must clear on the way out, including on throw")
   }
 
+  func testAccessorsAreSealedWhileAScopeIsOpen() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains(
+      "public  long getCount() {\n"
+      + "    synchronized (_ptr) {\n"
+      + "      if (_inScope) {"),
+      "an ordinary read during a scope conflicts with the exclusive access the "
+      + "scope holds, and nothing in Swift catches it through a raw pointer")
+
+    XCTAssertTrue(outer.contains(
+      "public  void setCount(long value) {\n"
+      + "    synchronized (_ptr) {\n"
+      + "      if (_inScope) {"),
+      "the same applies to writes")
+  }
+
   func testTypesWithoutAScopeGetNoScopeFlag() throws {
     let inner = try XCTUnwrap(generate()["Inner"])
     XCTAssertFalse(inner.contains("_inScope"),

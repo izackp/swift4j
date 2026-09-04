@@ -34,6 +34,10 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
 
 extension ClassGenerator: TypeGeneratorProtocol {
   func generate(with ctx: inout Context) -> TypeProxy {
+    // Only a type that hands out a scope needs the flag, and only such a type
+    // can be re-entered while one is open.
+    let hasScope = varGens.contains { $0.exposesAnyScopedBorrow }
+
     var failableCount = 0
     let ctors = ctorGens.enumerated().map { (index, gen) -> String in
       var failableOrdinal: Int? = nil
@@ -215,7 +219,7 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
 \(class_init)
 
   private final SwiftPtr _ptr;
-\(varGens.contains { $0.exposesAnyScopedBorrow } ? "  private boolean _inScope;\n" : "")
+\(hasScope ? "  private boolean _inScope;\n" : "")
   private long _ptr() {
     return _ptr.get();
   }
@@ -235,9 +239,9 @@ public \(nested ? "static" : "") class \(name)\(extendsClause) {
 \(borrowedClass)
 \(ctors)
 
-\(varGens.map{$0.generate(with: &ctx)}.joined(separator: "\n\n"))
+\(varGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
 
-\(methodGens.map{$0.generate(with: &ctx)}.joined(separator: "\n\n"))
+\(methodGens.map{$0.generate(with: &ctx, sealed: hasScope)}.joined(separator: "\n\n"))
 
 \(nestedTypeGens.compactMap {
     let proxy = $0.generate(with: &ctx)
