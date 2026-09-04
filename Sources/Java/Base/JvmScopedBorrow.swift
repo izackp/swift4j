@@ -28,6 +28,36 @@ public func _jvmScopedBorrow<T: JvmPointerBoxed>(_ value: inout T, _ body: JavaO
   }
 }
 
+/// Optional payload, borrowed in place.
+///
+/// Force-unwrap is an lvalue, so `&value!` addresses the payload where it lies
+/// rather than materialising a temporary. Measured on a stored optional: a
+/// write through the pointer reaches the original, the address is stable across
+/// separate borrows, and it falls inside the owner's own storage. That makes
+/// this a real borrow with no copy, the same as the non-optional case — which
+/// matters, because avoiding the copy is what the whole scope mechanism is for.
+///
+/// `nil` runs the body zero times, matching `if let`. The check has to come
+/// first: force-unwrapping `nil` traps.
+public func _jvmScopedBorrow<T: JvmPointerBoxed>(_ value: inout T?, _ body: JavaObject?) {
+  guard let body, value != nil else { return }
+  withUnsafeMutablePointer(to: &value!) { p in
+    guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(p)) else { return }
+    JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  }
+}
+
+/// Fallback for an optional whose payload bridges by conversion, mirroring the
+/// non-optional fallback below. Nothing generated reaches it; it exists so the
+/// emitted thunk compiles for every optional property type.
+public func _jvmScopedBorrow<T: JObjectConvertible>(_ value: inout T?, _ body: JavaObject?) {
+  guard let body, var unwrapped = value else { return }
+  guard let peer = unwrapped.toJavaObject() else { return }
+  JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  unwrapped = T.fromJavaObject(peer)
+  value = unwrapped
+}
+
 /// Fallback for types that bridge by conversion. The callback receives a
 /// converted object and the result is read back, so writes still land, but it
 /// is a copy rather than a view.

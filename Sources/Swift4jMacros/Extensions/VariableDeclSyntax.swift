@@ -28,16 +28,26 @@ extension VariableDeclSyntax {
   /// the native without exposing a public wrapper for it.
   static func scopedBorrowable(_ varDecl: VarDecl, isStatic: Bool) -> Bool {
     guard !isStatic, !varDecl.readonly, !varDecl.computed else { return false }
+    return borrowableType(varDecl.type)
+  }
 
+  /// An `Optional<T>` is borrowable exactly when `T` is: `&value!` addresses
+  /// the payload in place, so there is a single peer to hand out. Nesting is
+  /// not unwrapped repeatedly — `T??` has no sensible single borrow.
+  private static func borrowableType(_ type: TypeSyntax) -> Bool {
     let name: String
-    if let ident = varDecl.type.as(IdentifierTypeSyntax.self) {
+    if let ident = type.as(IdentifierTypeSyntax.self) {
       guard !ident.isPrimitive else { return false }
       name = ident.name.text
-    } else if varDecl.type.is(MemberTypeSyntax.self) {
+    } else if type.is(MemberTypeSyntax.self) {
       // Namespaced @jvm type, e.g. `Server.Subject`.
       return true
+    } else if let optional = type.as(OptionalTypeSyntax.self) {
+      let wrapped = optional.wrappedType
+      guard !wrapped.is(OptionalTypeSyntax.self) else { return false }
+      return borrowableType(wrapped)
     } else {
-      // Optional, Array, Dictionary, function types: no single peer to borrow.
+      // Array, Dictionary, function types: no single peer to borrow.
       return false
     }
     return name != "String" && name != "Data"

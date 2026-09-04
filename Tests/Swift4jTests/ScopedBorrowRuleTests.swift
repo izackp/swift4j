@@ -101,7 +101,11 @@ final class ScopedBorrowRuleTests: XCTestCase {
     // inout access, which for an observed stored property goes through the
     // synthesized modify accessor — store back, then run didSet. So observers
     // fire and the property does not need excluding.
-    XCTAssertEqual(selected, ["subject", "namespaced", "modifiedAt", "link", "observed"])
+    // `maybe` is an `Optional`. Force-unwrap is an lvalue, so `&value!`
+    // addresses the payload where it lies — verified in Swift: writes reach the
+    // original, the address is stable, and it falls inside the owner's storage.
+    // One level only; `T??` has no single sensible borrow.
+    XCTAssertEqual(selected, ["subject", "namespaced", "modifiedAt", "link", "observed", "maybe"])
   }
 
   /// Guards the half of the rule that is genuinely duplicated data rather than

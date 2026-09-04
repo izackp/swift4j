@@ -55,11 +55,21 @@ class VarGenerator {
 
   static func scopedBorrowable(_ decl: VariableDeclSyntax.VarDecl, isStatic: Bool) -> Bool {
     guard !isStatic, !decl.readonly, !decl.computed else { return false }
+    return borrowableType(decl.type)
+  }
 
-    if let ident = decl.type.as(IdentifierTypeSyntax.self) {
+  /// Mirrors `VariableDeclSyntax.borrowableType` on the macro side, including
+  /// the single level of optional unwrapping.
+  static func borrowableType(_ type: TypeSyntax) -> Bool {
+    if let ident = type.as(IdentifierTypeSyntax.self) {
       return !nonBorrowableNames.contains(ident.name.text)
     }
-    return decl.type.is(MemberTypeSyntax.self)
+    if let optional = type.as(OptionalTypeSyntax.self) {
+      let wrapped = optional.wrappedType
+      guard !wrapped.is(OptionalTypeSyntax.self) else { return false }
+      return borrowableType(wrapped)
+    }
+    return type.is(MemberTypeSyntax.self)
   }
 
   private func scopedBorrowable(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
@@ -77,10 +87,13 @@ class VarGenerator {
   private func exposesScopedBorrow(_ decl: VariableDeclSyntax.VarDecl) -> Bool {
     guard scopedBorrowable(decl), let registry else { return false }
 
-    if let ident = decl.type.as(IdentifierTypeSyntax.self) {
+    // The borrow is of the payload, so an optional is judged by what it wraps.
+    let type = Self.borrowedElement(of: decl.type)
+
+    if let ident = type.as(IdentifierTypeSyntax.self) {
       return registry.topLevelType(named: ident.name.text)?.is(StructDeclSyntax.self) ?? false
     }
-    if let member = decl.type.as(MemberTypeSyntax.self) {
+    if let member = type.as(MemberTypeSyntax.self) {
       let leaf = member.name.text
       let base = member.baseType.as(IdentifierTypeSyntax.self)?.name.text
       if let base, registry.hasNamespacedType(name: leaf, under: [base]) {
@@ -89,6 +102,12 @@ class VarGenerator {
       return registry.topLevelType(named: leaf)?.is(StructDeclSyntax.self) ?? false
     }
     return false
+  }
+
+  /// What a scope over `type` actually hands the callback. An optional yields
+  /// its payload; everything else yields itself.
+  static func borrowedElement(of type: TypeSyntax) -> TypeSyntax {
+    (type.as(OptionalTypeSyntax.self)?.wrappedType).map { $0 } ?? type
   }
 
   /// Whether any of this declaration's names gets a public `unsafeWith` — and
@@ -105,7 +124,11 @@ class VarGenerator {
 
     guard exposesScopedBorrow(decl) else { return nativeDecl }
 
-    let borrowedType = decl.type.map(with: &ctx)
+    let borrowedType = Self.borrowedElement(of: decl.type).map(with: &ctx)
+    let isOptional = decl.type.is(OptionalTypeSyntax.self)
+    let absentNote = isOptional
+      ? "\n   *\n   * <p>The body runs zero times when the property is absent, as `if let` does."
+      : ""
     return
 """
   /**
@@ -120,7 +143,7 @@ class VarGenerator {
    * <p>The scope holds this peer's monitor for its whole duration, since it
    * hands out an interior pointer into this instance and a concurrent write
    * would corrupt it. Keep {@code body} to small reads and writes: taking a
-   * Java lock inside it can deadlock against a thread blocked on this peer.
+   * Java lock inside it can deadlock against a thread blocked on this peer.\(absentNote)
    */
   public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
     synchronized (_ptr) {

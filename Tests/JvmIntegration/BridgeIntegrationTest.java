@@ -62,6 +62,9 @@ public class BridgeIntegrationTest {
     scopedAccessNests();
     scopeOnACopyAffectsOnlyTheCopy();
     scopedWriteRunsObservers();
+    scopedWriteLandsInAnOptional();
+    scopeOnAnAbsentOptionalDoesNotRun();
+    scopedWriteSurvivesAThrowingBody();
 
     section("mutating methods");
     mutatingMethodOnARootPersists();
@@ -128,7 +131,11 @@ public class BridgeIntegrationTest {
           mixed.getHolder() == mixed.getHolder());
   }
 
-  /** Optional<T> is not laid out as T, so it has no scope and no view. */
+  /**
+   * The copying getter loses the write, exactly as it does for a plain struct
+   * property. Unlike before, there is now something to reach for instead:
+   * unsafeWithMaybe borrows the payload in place.
+   */
   private static void optionalPropertyWriteShouldReachTheOwner() {
     Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] { new Leaf("e", 3) });
     lossy.getMaybe().setLabel("written");
@@ -225,6 +232,52 @@ public class BridgeIntegrationTest {
     mixed.getHolder().unsafeWithLeaf(l -> l.setLabel("nested-write"));
     check("scope on a class property's struct field lands",
           mixed.getHolder().getLeaf().getLabel().equals("nested-write"));
+  }
+
+  /**
+   * Force-unwrap is an lvalue, so the payload is borrowed where it lies rather
+   * than copied out and written back. Without that, this would be no cheaper
+   * than the getter and the scope would not be earning its name.
+   */
+  private static void scopedWriteLandsInAnOptional() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] { new Leaf("e", 3) });
+    lossy.unsafeWithMaybe(l -> l.setLabel("written-through"));
+    check("scoped write lands in an optional payload",
+          lossy.getMaybe().getLabel().equals("written-through"));
+  }
+
+  /** Absent runs the body zero times, as `if let` does — not once with null. */
+  private static void scopeOnAnAbsentOptionalDoesNotRun() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), null, new Leaf[] { new Leaf("e", 3) });
+    int[] runs = new int[1];
+    lossy.unsafeWithMaybe(l -> runs[0]++);
+    check("scope on an absent optional does not run", runs[0] == 0);
+  }
+
+  /**
+   * A throwing body must not lose the write or leave the scope open. The
+   * finally block is what closes it; without that, _inScope stays set and the
+   * next ordinary access on this peer throws.
+   *
+   * This was written to tell a real borrow apart from copy-in / write-back, on
+   * the theory that a throw would skip the write-back. It does not: JNI leaves
+   * the exception pending and Swift runs to the end of the thunk either way, so
+   * both designs store the value. Nothing observable from Java separates them,
+   * which is why the in-place claim was settled by measuring addresses in Swift
+   * instead.
+   */
+  private static void scopedWriteSurvivesAThrowingBody() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), new Leaf[] { new Leaf("e", 3) });
+    try {
+      lossy.unsafeWithMaybe(l -> {
+        l.setLabel("stored-before-throw");
+        throw new RuntimeException("from the body");
+      });
+    } catch (RuntimeException expected) {
+      // The scope is closed by the finally block regardless.
+    }
+    check("a throwing body still stores, and closes its scope",
+          lossy.getMaybe().getLabel().equals("stored-before-throw"));
   }
 
   private static void scopeOnACopyAffectsOnlyTheCopy() {
