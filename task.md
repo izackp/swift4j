@@ -1008,3 +1008,44 @@ simply not what the language does.
 That is the real cost, and it is the same fact as the stale-snapshot example
 above, grounded properly: not "surprising to a Java developer" but "different
 from what Swift actually does".
+
+
+## Measured: projections are slower, and boxing was not the bottleneck
+
+Same benchmark source on both branches, 500k iterations after 50k warmup, reaper
+pressure disabled to keep collection off the measurement.
+
+                                        fixes (copy)      projections
+    read one field                  1017 ns  1.00 box   2604 ns  0.00 box
+    read four fields off one value  1214 ns  1.00 box   9691 ns  0.00 box
+    write one field                  939 ns  1.00 box   2562 ns  0.00 box
+    read one array element          5887 ns  4.00 box   2926 ns  0.00 box
+
+Projections are 2.5x slower on a single-field read and 8x slower on four,
+despite allocating no Swift boxes at all.
+
+So the premise this whole design rested on was wrong. Boxing was assumed to be
+the dominant cost on the read path; it is not. A scope round-trip — Java into
+Swift, build a peer over the interior address, call back into Java, then Java
+into Swift again to read the field — costs roughly three times a malloc, a copy
+and a reaper registration. Trading the allocation for an extra crossing loses.
+
+**Decision: projections are not adopted.** The branch stays for the record. The
+copy semantics on `fixes` remain, and the four getter defects get the lint rule
+as planned.
+
+### What the numbers do say
+
+Arrays are the real problem, and they are the one row projections win. The
+copying getter boxes *every* element to hand back one: four boxes for four
+elements, and five hundred for five hundred. That is the shape the original
+sort-path complaint actually had.
+
+It does not need projections to fix. The `sizeOf<X>Impl` and
+`unsafeElementOf<X>Impl` natives built on this branch are independent of the
+projection machinery, and an indexed element accessor on `fixes` would get the
+same win while keeping copy semantics everywhere.
+
+Separately: a single property read costs about a microsecond, which is high for
+what it does. Neither design explains that, and it is worth its own look before
+any more effort goes into shaving allocations off it.
