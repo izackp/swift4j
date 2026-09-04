@@ -29,6 +29,9 @@ public class Bench {
     System.out.println("iterations=" + ITERATIONS);
     System.out.println();
 
+    decompose();
+    System.out.println();
+
     singleFieldRead();
     multiFieldRead();
     nestedWrite();
@@ -37,6 +40,36 @@ public class Bench {
     System.out.println();
     System.out.println("boxes/op is the number that matters: each is a Swift malloc,");
     System.out.println("a value copy, and a reaper registration that must later be drained.");
+  }
+
+  /**
+   * Splits a property read into its parts, so the microsecond can be attributed
+   * rather than guessed at.
+   *
+   * An Int read off a root is the floor: one crossing, no allocation, no
+   * conversion. A String read off the same root adds only the Swift-to-Java
+   * string conversion. A nested read adds the box on top of that.
+   */
+  private static void decompose() {
+    final Leaf leaf = new Leaf("subject-label", 1);
+    final Box box = new Box(new Leaf("subject-label", 1), "tag");
+
+    run("floor: Int off a root   leaf.getCount()", () -> leaf.getCount());
+    run("String off a root       leaf.getLabel()", () -> leaf.getLabel());
+    run("String off a root       box.getTag()", () -> box.getTag());
+    run("box only               box.getLeaf()", () -> box.getLeaf());
+    run("construct              new Leaf(...)", () -> new Leaf("x", 1));
+
+    // The scope path, which is what the bridge recommends for edits. Every
+    // entry used to resolve SwiftBorrow.with by string.
+    run("scope entry            box.unsafeWithLeaf(read)", () -> {
+      box.unsafeWithLeaf(l -> l.getCount());
+      return null;
+    });
+    run("scope entry            box.unsafeWithLeaf(write)", () -> {
+      box.unsafeWithLeaf(l -> l.setLabel("x"));
+      return null;
+    });
   }
 
   /** The sort path: reach one field off a nested value and discard the rest. */

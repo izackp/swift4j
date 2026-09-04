@@ -12,6 +12,24 @@ public protocol JvmPointerBoxed: JObjectConvertible {
 }
 
 
+/// The callback method, resolved once.
+///
+/// `JObject(body).call(method:sig:)` costs four JNI operations before the call
+/// it wants: a global ref allocated and freed, a reflective `getClass()`, and a
+/// string-keyed `GetMethodID` — every time. Measured, that dominated a scope
+/// entry, and `unsafeForEach` paid it per element.
+///
+/// The target never varies: `SwiftBorrow` has one method. So resolve it once
+/// and invoke on the raw local ref, which is valid for the whole native call.
+fileprivate let SwiftBorrow__class = JClass(jni.FindClass("io/scade/swift4j/SwiftBorrow")!)
+fileprivate let SwiftBorrow__with =
+  SwiftBorrow__class.getMethodID(name: "with", sig: "(Ljava/lang/Object;)V")!
+
+@inline(__always)
+private func _invoke(_ body: JavaObject, _ peer: JavaObject) {
+  jni.CallVoidMethod(body, SwiftBorrow__with, [JavaParameter(object: peer)])
+}
+
 /// Hands `value` to a Java `SwiftBorrow` callback for the duration of the call.
 ///
 /// Two overloads, resolved at compile time. The macro emits the same call for
@@ -24,7 +42,7 @@ public func _jvmScopedBorrow<T: JvmPointerBoxed>(_ value: inout T, _ body: JavaO
   guard let body else { return }
   withUnsafeMutablePointer(to: &value) { p in
     guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(p)) else { return }
-    JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+    _invoke(body, peer)
   }
 }
 
@@ -43,7 +61,7 @@ public func _jvmScopedBorrow<T: JvmPointerBoxed>(_ value: inout T?, _ body: Java
   guard let body, value != nil else { return }
   withUnsafeMutablePointer(to: &value!) { p in
     guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(p)) else { return }
-    JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+    _invoke(body, peer)
   }
 }
 
@@ -53,7 +71,7 @@ public func _jvmScopedBorrow<T: JvmPointerBoxed>(_ value: inout T?, _ body: Java
 public func _jvmScopedBorrow<T: JObjectConvertible>(_ value: inout T?, _ body: JavaObject?) {
   guard let body, var unwrapped = value else { return }
   guard let peer = unwrapped.toJavaObject() else { return }
-  JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  _invoke(body, peer)
   unwrapped = T.fromJavaObject(peer)
   value = unwrapped
 }
@@ -72,12 +90,11 @@ public func _jvmScopedBorrow<T: JObjectConvertible>(_ value: inout T?, _ body: J
 /// seal is what prevents it, so this is only sound alongside that.
 public func _jvmScopedBorrowEach<T: JvmPointerBoxed>(_ value: inout [T], _ body: JavaObject?) {
   guard let body else { return }
-  let callback = JObject(body)
   value.withUnsafeMutableBufferPointer { buf in
     guard let base = buf.baseAddress else { return }
     for i in 0..<buf.count {
       guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(base + i)) else { continue }
-      callback.call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+      _invoke(body, peer)
     }
   }
 }
@@ -88,10 +105,9 @@ public func _jvmScopedBorrowEach<T: JvmPointerBoxed>(_ value: inout [T], _ body:
 /// compiles for every array property type.
 public func _jvmScopedBorrowEach<T: JObjectConvertible>(_ value: inout [T], _ body: JavaObject?) {
   guard let body else { return }
-  let callback = JObject(body)
   for i in value.indices {
     guard let peer = value[i].toJavaObject() else { continue }
-    callback.call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+    _invoke(body, peer)
     value[i] = T.fromJavaObject(peer)
   }
 }
@@ -106,6 +122,6 @@ public func _jvmScopedBorrowEach<T: JObjectConvertible>(_ value: inout [T], _ bo
 public func _jvmScopedBorrow<T: JObjectConvertible>(_ value: inout T, _ body: JavaObject?) {
   guard let body else { return }
   guard let peer = value.toJavaObject() else { return }
-  JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  _invoke(body, peer)
   value = T.fromJavaObject(peer)
 }
