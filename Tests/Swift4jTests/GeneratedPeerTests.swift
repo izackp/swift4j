@@ -301,6 +301,44 @@ final class GeneratedPeerTests: XCTestCase {
                   "any value peer can be cached by an owner")
   }
 
+  // MARK: - Lint annotations
+
+  func testCopyingGettersAndMutatorsAreMarked() throws {
+    let generated = try generate()
+    let outer = try XCTUnwrap(generated["Outer"])
+    let inner = try XCTUnwrap(generated["Inner"])
+
+    XCTAssertTrue(outer.contains("@io.scade.swift4j.SwiftCopyingGetter\n  public  Inner getInner()"),
+                  "a struct property getter hands back a detached copy")
+    XCTAssertTrue(outer.contains("@io.scade.swift4j.SwiftMutating\n  public  void setInner("),
+                  "and its setter writes to the receiver")
+
+    // Marked so an analyzer can see through the index in
+    // `getInners()[2].setLabel(x)` — the elements are copies too.
+    XCTAssertTrue(outer.contains("@io.scade.swift4j.SwiftCopyingGetter\n  public  Inner[] getInners()"))
+    XCTAssertTrue(outer.contains("@io.scade.swift4j.SwiftCopyingGetter\n  public Inner getInnersAt(int index)"))
+
+    XCTAssertTrue(inner.contains("@io.scade.swift4j.SwiftMutating\n  public  void setLabel("))
+  }
+
+  func testNonCopyingGettersAreNotMarked() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    // Neither is a defect waiting to happen: a primitive has nothing to
+    // mutate, and Date bridges by conversion rather than to a peer.
+    XCTAssertFalse(outer.contains("@io.scade.swift4j.SwiftCopyingGetter\n  public  long getCount()"))
+    XCTAssertFalse(outer.contains("@io.scade.swift4j.SwiftCopyingGetter\n  public  Date getModifiedAt()"))
+  }
+
+  func testOnlySwiftMutatingMethodsAreMarked() throws {
+    let holder = try XCTUnwrap(generate()["Holder"])
+
+    // `bump()` is not declared `mutating` on a class, and calling a
+    // non-mutating method on a temporary is harmless — marking it would flag
+    // correct code.
+    XCTAssertFalse(holder.contains("@io.scade.swift4j.SwiftMutating\n  public  void bump()"))
+  }
+
   func testTypesWithoutAScopeGetNoScopeFlag() throws {
     let inner = try XCTUnwrap(generate()["Inner"])
     XCTAssertFalse(inner.contains("_inScope"),

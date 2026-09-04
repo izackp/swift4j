@@ -15,6 +15,13 @@ class MethodGenerator {
   /// A closure parameter means Java code runs inside the native call, where it
   /// can take JVM monitors and deadlock against a thread waiting on this
   /// peer's. Those methods stay unguarded; see `PeerLock`.
+  /// Whether Swift declares this `mutating`. Non-mutating methods are left
+  /// unmarked deliberately: calling one on a temporary is harmless, and marking
+  /// them would flag it.
+  private var isMutating: Bool {
+    funcDecl.modifiers.contains { $0.name.tokenKind == .keyword(.mutating) }
+  }
+
   private var takesClosure: Bool {
     funcDecl.signature.parameterClause.parameters.contains { param in
       var type = param.type
@@ -94,9 +101,11 @@ class MethodGenerator {
     // while Swift never saw it.
     let detach = cacheable && !funcDecl.isStatic ? "    _detachCache();\n" : ""
 
+    let mutatingMark = isMutating ? "  @io.scade.swift4j.SwiftMutating\n" : ""
+
     return
 """
-  public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {
+\(mutatingMark)  public \(modifiers) \(retType) \(name)(\(paramDecls.joined(separator: ", "))) \(throwsClause) {
 \(detach)\(guarded)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(paramDeclsImpl.joined(separator: ", "))) \(throwsClause);

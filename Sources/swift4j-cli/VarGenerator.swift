@@ -296,6 +296,7 @@ class VarGenerator {
    * <p>The result is a copy, like every other getter here, so writes to it do
    * not reach the array. Use {@link #\(elementName)(int, io.scade.swift4j.SwiftBorrow)} for that.
    */
+  @io.scade.swift4j.SwiftCopyingGetter
   public \(borrowedType) get\(cap)At(int index) {
     final \(borrowedType)[] out = new \(borrowedType)[1];
     \(elementName)Raw(index, raw -> out[0] = ((\(borrowedType)) raw).copy());
@@ -412,9 +413,17 @@ class VarGenerator {
                                      sealed: sealed,
                                      owner: "\(className).\(name)")
 
+    // Marked only where the result is a detached copy of Swift storage. A
+    // primitive or String has nothing to mutate, and a class peer's getter
+    // propagates, so neither is a defect waiting to happen.
+    // An array getter is marked too, so an analyzer can see through the index
+    // in `getLeaves()[2].setLabel(x)` — the elements are copies as well.
+    let copying = (slot != nil || exposesScopedForEach(decl))
+      ? "  @io.scade.swift4j.SwiftCopyingGetter\n" : ""
+
     return
 """
-  public \(modifiers) \(retType) \(name)() {
+\(copying)  public \(modifiers) \(retType) \(name)() {
 \(call)
   }
   private \(modifiers) native \(retType) \(name)Impl(\(implParamDecl));
@@ -454,6 +463,7 @@ class VarGenerator {
 
     return
 """
+  @io.scade.swift4j.SwiftMutating
   public \(modifiers) void \(name)(\(valType) value) {
 \(!varDecl.isStatic && cacheable ? "    _detachCache();\n" : "")\(call)
   }
