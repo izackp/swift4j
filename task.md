@@ -536,3 +536,102 @@ out of `unsafeWith` (undefined behaviour by contract, which is what the
 8. **D5.** Document struct-vs-class.
 9. Decide G3 (list snapshots) and G5 (thread confinement).
 10. Audit `JObjectRef`'s weak peer cache. Rewrite `SwiftArray` or delete it.
+
+
+## G5 resolved: the cross-thread race, and D8
+
+The race is **not** a borrowing problem. `DangerTest` demonstrated it through
+`unsafeWith`, which made it look like one. It is not:
+
+    thread A:  box.getTag()          load the tag pointer, then retain it
+    thread B:  box.setTag("x")       release the old tag, then store the new
+
+Two plain accessors on one shared peer. B's release can land between A's load
+and A's retain, so A retains freed memory. `unsafeWith` is not involved and
+neither is any nested struct. Class peers are the worst case, since one Swift
+object behind one Java peer is their whole design.
+
+Kotlin does not have this problem. JVM reference writes are atomic and the
+collector keeps a referent alive as long as any thread can name it, so a racy
+Kotlin program returns a stale value. Racy ARC frees at refcount zero and knows
+nothing about a thread that has loaded a pointer but not yet retained it.
+
+Actor isolation would not help either. The thunk is a `@convention(c)` pointer
+the JVM calls from whatever thread it likes; there is no executor hop and the
+compiler cannot see the call site.
+
+### Why an atomic store is not the fix
+
+The unsafe step is on the *reader* — load and retain are two operations. Any
+store-side primitive leaves that window open. What is actually needed is
+load+retain as one indivisible step, which comes from either mutual exclusion
+or deferred reclamation. Per-field atomicity would also be meaningless for a
+struct: `setLabel` then `setCount` is two stores under any scheme.
+
+### Rejected
+
+**Thread confinement.** Stamp the owning thread on the peer, assert it in every
+native. Free in release, deterministic in debug. Rejected: the data has to be
+reachable from async code.
+
+**Document it.** "Peers are not thread-safe, callers serialise." Costs nothing,
+fixes nothing. Same rejection.
+
+**Deferred reclamation.** Hazard pointers or epoch reclamation, so nothing is
+freed while a reader might hold it. Correct and lock-free, and it is what the
+JVM gives Kotlin for free. Rejected as disproportionate: it is a small garbage
+collector underneath ARC.
+
+**A lock held across an `unsafeWith` scope.** Arbitrary Java runs inside the
+scope and can take JVM monitors, so a thread holding the Swift lock and wanting
+a monitor can deadlock against a thread holding that monitor and wanting the
+Swift lock. Neither runtime can see the other's lock graph. Rejected — and it
+is unnecessary, see D8's scope rule.
+
+### D8: stripe-locked accessors
+
+Serialise every native call on the **root allocation** it touches.
+
+    getTagImpl(ptr):       lock(root); load + retain; unlock
+    setTagImpl(ptr, v):    lock(root); release old + store new; unlock
+
+Properties:
+
+- No user code runs inside the lock, so the span is bounded, non-reentrant,
+  and only ever one lock deep. No deadlock is constructible.
+- Concurrent access from any thread becomes safe rather than forbidden, which
+  is the requirement confinement failed.
+- Concurrent readers serialise unnecessarily. Accepted: a reader-writer lock
+  would not, but reads here are short enough that the extra state costs more
+  than it saves.
+
+**Where the lock lives.** Not in the object. A boxed struct is a bare `malloc`
+with no header, and adding one changes `allocate`, `fromPtr`, `deinit`, and
+`fromUnownedPtr` together. Instead a striped global table — a fixed number of
+locks, index derived from the root pointer. No layout change, no per-object
+cost. Unrelated objects can collide on a stripe, which costs contention and
+nothing else. Stripe count wants to be a power of two so the index is a mask.
+
+**Cost.** One uncontended lock and unlock per crossing, against a JNI
+transition that already costs several times that. Against the 36k reads of a
+sort recompute it is well under a millisecond, so it does not reopen the
+performance problem this branch exists to fix.
+
+**The scope rule.** `unsafeWith` takes no lock at all. Memory safety only
+requires each individual field access to be exclusive; making a whole callback
+body atomic is a stronger property nothing here needs. The `Borrowed` view's
+forwarding accessors each take the root lock for their own duration, exactly
+like a plain accessor. That is what removes the deadlock, and it means the
+scope is memory-safe without being transactional — a concurrent writer can
+still interleave between two reads inside one scope, and callers get a
+consistent snapshot by copying, not by holding a scope.
+
+**What has to be built.** `Borrowed` currently wraps a peer over an *interior*
+pointer, so locking on what it holds would key a different stripe from the
+root's and exclude nothing. The root pointer has to be threaded through
+`_jvmScopedBorrow` and `wrapBorrowed` so the view locks the allocation it
+actually lives inside.
+
+Unresolved: what identifies the root for a peer built by `fromPtr` from a
+Swift-side return value, where there is no enclosing allocation and the peer is
+itself the root.
