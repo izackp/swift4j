@@ -281,6 +281,24 @@ final class GeneratedPeerTests: XCTestCase {
                   "and it must be re-materialised per call, since the owner may have moved on")
   }
 
+  func testArrayGetterReturnsElementProjections() throws {
+    let outer = try XCTUnwrap(generate()["Outer"])
+
+    XCTAssertTrue(outer.contains("views[i] = Inner.projection(body -> unsafeElementOfInnersRaw(index, body));"),
+                  "each element is a live view bound to its index")
+
+    // Indexed, not iterated: a projection is re-entered once per operation and
+    // has to land on the same element every time.
+    XCTAssertTrue(outer.contains("private native void unsafeElementOfInnersImpl(long ptr, int index,"),
+                  "the indexed native must be declared")
+
+    // Learning the length via the copying native would box the whole array,
+    // which is the cost projections exist to avoid.
+    XCTAssertTrue(outer.contains("private native int sizeOfInnersImpl(long ptr);"))
+    XCTAssertTrue(outer.contains("final int count = sizeOfInnersRaw();"),
+                  "length must not come from the copying getter")
+  }
+
   func testClassPeersAreNeverProjected() throws {
     let holder = try XCTUnwrap(generate()["Holder"])
 

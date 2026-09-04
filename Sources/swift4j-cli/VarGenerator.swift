@@ -214,7 +214,11 @@ class VarGenerator {
     guard scopedForEachable(decl) else { return "" }
 
     let name = "unsafeForEach\(decl.capitalizedName)"
-    let nativeDecl = "  private native void \(name)Impl(long ptr, io.scade.swift4j.SwiftBorrow body);"
+    let elementName = "unsafeElementOf\(decl.capitalizedName)"
+    let nativeDecl =
+      "  private native void \(name)Impl(long ptr, io.scade.swift4j.SwiftBorrow body);\n"
+      + "  private native void \(elementName)Impl(long ptr, int index, io.scade.swift4j.SwiftBorrow body);\n"
+      + "  private native int sizeOf\(decl.capitalizedName)Impl(long ptr);"
 
     guard exposesScopedForEach(decl),
           let element = decl.type.as(ArrayTypeSyntax.self)?.element else { return nativeDecl }
@@ -234,25 +238,61 @@ class VarGenerator {
    * keep {@code body} to small reads and writes.
    */
   public void \(name)(io.scade.swift4j.SwiftBorrow<\(borrowedType).Borrowed> body) {
-    synchronized (_ptr) {
+    final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
+    try {
+      \(name)Raw(raw -> {
+        if (scope[0] != null) {
+          scope[0].invalidate();
+        }
+        scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
+        body.with(scope[0]);
+      });
+    } finally {
+      if (scope[0] != null) {
+        scope[0].invalidate();
+      }
+    }
+  }
+
+  private void \(name)Raw(io.scade.swift4j.SwiftBorrow body) {
+\(projectable ? "    if (_projected()) {\n      _through(v -> { v.\(name)Raw(body); return null; });\n      return;\n    }\n" : "")    synchronized (_ptr) {
       if (_inScope) {
         throw new IllegalStateException(
           "\(className).\(name) is already in a scope on this instance");
       }
       _inScope = true;
-      final \(borrowedType).Borrowed[] scope = new \(borrowedType).Borrowed[1];
       try {
-        \(callee).\(name)Impl(_ptr(), raw -> {
-          if (scope[0] != null) {
-            scope[0].invalidate();
-          }
-          scope[0] = \(borrowedType).wrapBorrowed((\(borrowedType)) raw);
-          body.with(scope[0]);
-        });
+        \(callee).\(name)Impl(_ptr(), body);
       } finally {
-        if (scope[0] != null) {
-          scope[0].invalidate();
-        }
+        _inScope = false;
+      }
+    }
+  }
+
+  /**
+   * The scope behind an element projection. Indexed rather than iterated,
+   * because a projection is re-entered once per operation and has to land on
+   * the same element every time.
+   *
+   * <p>An index the array no longer holds runs the body zero times, so a
+   * projection kept across a shrink reads as absent rather than trapping.
+   */
+  private int sizeOf\(decl.capitalizedName)Raw() {
+\(projectable ? "    if (_projected()) {\n      return _through(v -> v.sizeOf\(decl.capitalizedName)Raw());\n    }\n" : "")    synchronized (_ptr) {
+      return \(callee).sizeOf\(decl.capitalizedName)Impl(_ptr());
+    }
+  }
+
+  private void \(elementName)Raw(int index, io.scade.swift4j.SwiftBorrow body) {
+\(projectable ? "    if (_projected()) {\n      _through(v -> { v.\(elementName)Raw(index, body); return null; });\n      return;\n    }\n" : "")    synchronized (_ptr) {
+      if (_inScope) {
+        throw new IllegalStateException(
+          "\(className).\(elementName) is already in a scope on this instance");
+      }
+      _inScope = true;
+      try {
+        \(callee).\(elementName)Impl(_ptr(), index, body);
+      } finally {
         _inScope = false;
       }
     }
@@ -310,7 +350,53 @@ class VarGenerator {
     // rather than a copy, so a write through it reaches this instance. The
     // native stays declared: RegisterNatives needs it, and _ptr() uses the
     // copying path to materialise a value when one is passed to Swift.
-    if !varDecl.isStatic, !decl.type.is(OptionalTypeSyntax.self), exposesScopedBorrow(decl) {
+    // An array is handed back as an array of element projections. The array
+    // object itself is still a fresh Java array — only its contents are live —
+    // so adding to or removing from it does nothing, as it always did.
+    if !varDecl.isStatic, exposesScopedForEach(decl),
+       let element = decl.type.as(ArrayTypeSyntax.self)?.element {
+      let projected = Self.borrowedElement(of: element).map(with: &ctx)
+      let scopeName = "unsafeElementOf\(decl.capitalizedName)Raw"
+
+      return
+"""
+  /**
+   * Live views of this array's elements, not copies: a write through any of
+   * them is a write into this instance's array.
+   *
+   * <p>The returned Java array is itself a snapshot of the length. Adding to it
+   * or replacing a slot changes nothing on the Swift side; only writes through
+   * the elements land.
+   */
+  public \(retType) \(name)() {
+    final int count = sizeOf\(decl.capitalizedName)Raw();
+    \(projected)[] views = new \(projected)[count];
+    for (int i = 0; i < count; i++) {
+      final int index = i;
+      views[i] = \(projected).projection(body -> \(scopeName)(index, body));
+    }
+    return views;
+  }
+\(nativeDecl)
+"""
+    }
+
+    if !varDecl.isStatic, exposesScopedBorrow(decl) {
+      let projected = Self.borrowedElement(of: decl.type).map(with: &ctx)
+      let scopeName = "unsafeWith\(decl.capitalizedName)Raw"
+
+      // An absent optional has to read back as null, and the scope already
+      // answers that: it runs the body zero times when there is no payload. So
+      // presence costs one crossing and no new native, which keeps the
+      // registered set — and therefore RegisterNatives — untouched.
+      let body = decl.type.is(OptionalTypeSyntax.self)
+        ? """
+    final boolean[] present = new boolean[1];
+    \(scopeName)(raw -> present[0] = true);
+    return present[0] ? \(projected).projection(this::\(scopeName)) : null;
+"""
+        : "    return \(projected).projection(this::\(scopeName));"
+
       return
 """
   /**
@@ -319,7 +405,7 @@ class VarGenerator {
    * Swift when {@code box} is a reference.
    */
   public \(retType) \(name)() {
-    return \(retType).projection(this::unsafeWith\(decl.capitalizedName)Raw);
+\(body)
   }
 \(nativeDecl)
 """

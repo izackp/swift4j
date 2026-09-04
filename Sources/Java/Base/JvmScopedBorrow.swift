@@ -82,6 +82,32 @@ public func _jvmScopedBorrowEach<T: JvmPointerBoxed>(_ value: inout [T], _ body:
   }
 }
 
+/// One element of an array, borrowed in place, addressed by index.
+///
+/// `unsafeForEach` cannot back a projection: a projection is re-entered once
+/// per operation and has to land on the same element every time, which an
+/// iteration cannot promise. An out-of-range index runs the body zero times
+/// rather than trapping, so a stale projection reads as absent instead of
+/// crashing — the array may legitimately have shrunk since it was handed out.
+public func _jvmScopedBorrowElement<T: JvmPointerBoxed>(_ value: inout [T], _ index: Int, _ body: JavaObject?) {
+  guard let body, value.indices.contains(index) else { return }
+  let callback = JObject(body)
+  value.withUnsafeMutableBufferPointer { buf in
+    guard let base = buf.baseAddress else { return }
+    guard let peer = T.fromUnownedPointer(UnsafeMutableRawPointer(base + index)) else { return }
+    callback.call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  }
+}
+
+/// Fallback mirroring `_jvmScopedBorrowEach`'s, for a conversion-bridged
+/// element. Nothing generated reaches it.
+public func _jvmScopedBorrowElement<T: JObjectConvertible>(_ value: inout [T], _ index: Int, _ body: JavaObject?) {
+  guard let body, value.indices.contains(index) else { return }
+  guard let peer = value[index].toJavaObject() else { return }
+  JObject(body).call(method: "with", sig: "(Ljava/lang/Object;)V", [peer.toJavaParameter()])
+  value[index] = T.fromJavaObject(peer)
+}
+
 /// Fallback for an array whose element bridges by conversion. Elements are
 /// converted and written back per iteration, so writes still land, but each is
 /// a copy. Nothing generated reaches this; it exists so the emitted thunk

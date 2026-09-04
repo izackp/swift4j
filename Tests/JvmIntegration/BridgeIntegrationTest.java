@@ -70,6 +70,14 @@ public class BridgeIntegrationTest {
     forEachViewIsInvalidatedPerElement();
     forEachOnAnEmptyArrayDoesNotRun();
 
+    section("projections");
+    projectionTracksLaterOwnerWrites();
+    projectionIsNotASnapshot();
+    copyOfAProjectionIsDetached();
+    projectionSurvivesTheArrayShrinking();
+    projectionPassedToSwiftIsMaterialised();
+    chainedProjectionReachesTheRoot();
+
     section("mutating methods");
     mutatingMethodOnARootPersists();
     mutatingMethodOnANestedValueShouldPersist();
@@ -217,6 +225,73 @@ public class BridgeIntegrationTest {
     duplicate.getHolder().setCount(42);
 
     check("copy shares the nested reference", original.getHolder().getCount() == 42);
+  }
+
+  // ---- projections ----
+
+  private static void projectionTracksLaterOwnerWrites() {
+    Box box = new Box(new Leaf("first", 1), "tag");
+    Leaf view = box.getLeaf();
+    box.setLeaf(new Leaf("second", 2));
+    check("a projection sees a later write to its owner", "second".equals(view.getLabel()));
+  }
+
+  /**
+   * The deliberate divergence from Swift, pinned so it cannot drift quietly.
+   *
+   * Swift yields a copy on every struct property read, so `let before = box.leaf`
+   * is a snapshot there and is not one here. This is the cost of the design;
+   * copy() is how you take a real snapshot.
+   */
+  private static void projectionIsNotASnapshot() {
+    Box box = new Box(new Leaf("before", 1), "tag");
+    Leaf before = box.getLeaf();
+    box.unsafeWithLeaf(l -> l.setLabel("after"));
+    check("a projection is not a snapshot, unlike Swift's copy-on-read",
+          "after".equals(before.getLabel()));
+  }
+
+  private static void copyOfAProjectionIsDetached() {
+    Box box = new Box(new Leaf("original", 1), "tag");
+    Leaf snapshot = box.getLeaf().copy();
+    box.unsafeWithLeaf(l -> l.setLabel("changed"));
+    check("copy() of a projection is a real snapshot",
+          "original".equals(snapshot.getLabel()));
+  }
+
+  /**
+   * An element projection outliving its index must not read freed memory. The
+   * indexed scope runs the body zero times when the index is gone, so the read
+   * comes back null rather than trapping.
+   */
+  private static void projectionSurvivesTheArrayShrinking() {
+    Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
+                            new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2) });
+    Leaf second = lossy.getLeaves()[1];
+    check("element projection reads before the shrink", "e1".equals(second.getLabel()));
+
+    lossy.setLeaves(new Leaf[] { new Leaf("only", 9) });
+    check("element projection past the end reads as absent", second.getLabel() == null);
+  }
+
+  /** A projection has no address, so handing one to Swift must produce a box. */
+  private static void projectionPassedToSwiftIsMaterialised() {
+    Box source = new Box(new Leaf("moved", 7), "tag");
+    Box target = new Box(new Leaf("old", 0), "tag");
+    target.setLeaf(source.getLeaf());
+    check("a projection passed to Swift materialises", "moved".equals(target.getLeaf().getLabel()));
+
+    // And it materialised a copy, so the two are not aliased afterwards.
+    target.unsafeWithLeaf(l -> l.setLabel("target-only"));
+    check("materialising produced a copy, not an alias",
+          "moved".equals(source.getLeaf().getLabel()));
+  }
+
+  private static void chainedProjectionReachesTheRoot() {
+    Mixed mixed = new Mixed(new Leaf("a", 1), new Holder(1, new Leaf("deep", 2)));
+    mixed.getHolder().getLeaf().setLabel("through-the-chain");
+    check("a chained projection writes back to the root",
+          "through-the-chain".equals(mixed.getHolder().getLeaf().getLabel()));
   }
 
   // ---- unsafeWith ----
