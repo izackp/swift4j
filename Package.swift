@@ -59,7 +59,10 @@ let package = Package(
                   .process("java/io/scade/swift4j/Result.java"),
                   .process("java/io/scade/swift4j/SwiftError.java"),
                   .process("java/io/scade/swift4j/SwiftPtr.java"),
-                  .process("java/io/scade/swift4j/SwiftBorrow.java")
+                  .process("java/io/scade/swift4j/SwiftBorrow.java"),
+                  .process("java/io/scade/swift4j/SwiftCacheOwner.java"),
+                  .process("java/io/scade/swift4j/SwiftCopyingGetter.java"),
+                  .process("java/io/scade/swift4j/SwiftMutating.java")
                 ]),
 
         .executableTarget(name: "swift4j-cli",
