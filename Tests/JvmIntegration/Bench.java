@@ -36,6 +36,8 @@ public class Bench {
     multiFieldRead();
     nestedWrite();
     arrayElementRead();
+    System.out.println();
+    arrayScaling();
 
     System.out.println();
     System.out.println("boxes/op is the number that matters: each is a Swift malloc,");
@@ -100,6 +102,39 @@ public class Bench {
     });
   }
 
+  /**
+   * How the array getter scales. It boxes every element to hand back one, so
+   * the cost of reaching index 2 is set by the length of the array, not by
+   * anything the caller asked for.
+   *
+   * Iteration counts shrink as the arrays grow, since a single call at the top
+   * end costs milliseconds.
+   */
+  private static void arrayScaling() {
+    int[] sizes = { 4, 100, 1_000, 10_000 };
+    int[] iterations = { 200_000, 20_000, 2_000, 200 };
+
+    for (int s = 0; s < sizes.length; s++) {
+      Leaf[] elements = new Leaf[sizes[s]];
+      for (int i = 0; i < elements.length; i++) {
+        elements[i] = new Leaf("element-" + i, i);
+      }
+      final Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2), elements);
+
+      runN(String.format("read [2] of %5d   getLeaves()[2].getLabel()", sizes[s]),
+           iterations[s],
+           () -> lossy.getLeaves()[2].getLabel());
+
+      // The scope reaches the same element without boxing any of them.
+      runN(String.format("scope over %5d    unsafeForEach (read all)", sizes[s]),
+           iterations[s],
+           () -> {
+             lossy.unsafeForEachLeaves(l -> l.getCount());
+             return null;
+           });
+    }
+  }
+
   private static void arrayElementRead() {
     final Lossy lossy = new Lossy(new Leaf("a", 1), new Leaf("opt", 2),
                                   new Leaf[] { new Leaf("e0", 1), new Leaf("e1", 2),
@@ -113,7 +148,11 @@ public class Bench {
   }
 
   private static void run(String name, Op op) {
-    for (int i = 0; i < WARMUP; i++) {
+    runN(name, ITERATIONS, op);
+  }
+
+  private static void runN(String name, int iterations, Op op) {
+    for (int i = 0; i < Math.min(WARMUP, iterations); i++) {
       op.run();
     }
 
@@ -129,7 +168,7 @@ public class Bench {
 
     long boxesBefore = SwiftPtr.totalRegistered();
     long start = System.nanoTime();
-    for (int i = 0; i < ITERATIONS; i++) {
+    for (int i = 0; i < iterations; i++) {
       op.run();
     }
     long elapsed = System.nanoTime() - start;
@@ -137,7 +176,7 @@ public class Bench {
 
     System.out.printf("  %-44s %7.1f ns/op   %6.2f boxes/op%n",
                       name,
-                      (double) elapsed / ITERATIONS,
-                      (double) boxes / ITERATIONS);
+                      (double) elapsed / iterations,
+                      (double) boxes / iterations);
   }
 }
