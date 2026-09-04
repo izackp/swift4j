@@ -676,3 +676,38 @@ under a second.
 Worth carrying forward: any test of ARC-level races through the bridge has to
 force heap storage, or it silently tests nothing. A green run is otherwise
 indistinguishable from a fixed bug.
+
+### D8, second pass: scopes are guarded too
+
+The correction above said scopes stay caller-serialised. That was one step
+short. `unsafeWith` now holds the owner's monitor for the whole callback.
+
+Per-access locking inside a scope is not enough and never was: the interior
+pointer stays live across the callback, so a concurrent `setLeaf` corrupts it
+however the individual view reads are guarded. Either the monitor spans the
+callback or the scope is unsafe.
+
+A try-lock was considered and rejected. It only prevents scope-versus-scope
+contention, and the deadlock cycle does not need two scopes:
+
+    thread A: inside a scope, holds the peer, callback wants monitor M
+    thread B: holds M, calls box.getTag(), blocks on the peer
+
+B is an ordinary getter. A getter cannot fail fast, so try-lock leaves the
+cycle intact while adding a timing-dependent exception — the worst kind under
+R8, since it passes in testing and throws under load.
+
+So the exposure is accepted rather than removed: a scope may deadlock if its
+callback takes a Java lock. The contract is that a scope does small reads and
+writes, which is what makes that acceptable.
+
+Nesting is separate and is rejected outright. Monitors are reentrant, so
+`box.unsafeWithLeaf(a -> box.unsafeWithLeaf(b -> …))` would otherwise be handed
+two live views of one storage. An `_inScope` flag on the owner throws instead.
+That is deterministic caller error, not a race, which is the R8 distinction:
+it cannot pass in testing and fail in production. Scopes on distinct peers
+still nest, and the flag is only emitted for types that expose a scope.
+
+`DangerTest` now runs four scenarios, all expected to survive: `race-root`
+(plain accessors), `race` (scope versus reader), `escape` (view outliving its
+scope), `nest`. Each was verified against a build with its guard removed.
