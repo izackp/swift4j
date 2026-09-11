@@ -79,6 +79,20 @@ public final class SwiftPtr {
     return Reaper.WATERMARK.get();
   }
 
+  /**
+   * Measurement only: holds the reapers so a backlog of enqueued references can
+   * accumulate before a drain is timed.
+   *
+   * Not a lifetime control, and not useful in an application -- while paused,
+   * nothing is reclaimed. It exists because a drain timed from an unpaused
+   * reaper is dominated by how fast the collector enqueues rather than by how
+   * fast the reaper frees, which moves the result by 2x between runs and hides
+   * any change to the drain itself. See ReaperBench.
+   */
+  public static void pauseReapers(boolean paused) {
+    Reaper.PAUSED = paused;
+  }
+
   /** Estimated native bytes held by the handles counted by {@link #liveCount}. */
   public static long nativeBytesOutstanding() {
     return Reaper.NATIVE_BYTES.get();
@@ -226,10 +240,11 @@ public final class SwiftPtr {
     private static final long MIN_GC_INTERVAL_NS = 2_000_000_000L;
 
     /**
-     * Reclamation is one JNI deinit per phantom reference on a single thread,
-     * so draining a large population takes seconds, not milliseconds. The old
-     * 250 ms budget could not observe a real drain, which made every pass look
-     * ineffective.
+     * Reclamation is a JNI deinit per phantom reference, so draining a large
+     * population takes hundreds of milliseconds even spread across the reaper
+     * threads. The old 250 ms budget could not observe a real drain, which made
+     * every pass look ineffective. Kept generous: the budget only bounds how
+     * long a pass waits, and the pass exits as soon as the drain goes idle.
      */
     private static final long DRAIN_BUDGET_MS = 5_000L;
     private static final long DRAIN_POLL_MS = 10L;
@@ -291,28 +306,87 @@ public final class SwiftPtr {
       }
     }
 
-    static {
-      Thread reaper = new Thread(() -> {
-        while (true) {
-          try {
-            @SuppressWarnings("unchecked")
-            PhantomReference<Object> ref =
-              (PhantomReference<Object>) QUEUE.remove();
+    /**
+     * Reclamation is dominated by the Swift side: for a value with refcounted
+     * fields, releasing them and freeing the storage is 70-80% of the measured
+     * per-object cost, against under 60 ns for the queue and map bookkeeping
+     * combined. That work parallelises, because deinit of distinct instances is
+     * independent -- a {@link Cleanup} holds a pointer and a per-class static
+     * native, and the generated peer's property cache is per-instance Java
+     * state that reclamation never touches.
+     *
+     * Half the cores, capped at four: a reaper runs above normal priority, so
+     * taking every core would trade a native-memory stall for a UI stall. Eight
+     * threads measured slower than four on an eight-core host anyway.
+     */
+    private static final int REAPER_THREADS =
+      Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
 
+    /**
+     * Dequeue in batches: one blocking {@code remove()} followed by
+     * non-blocking {@code poll()}s.
+     *
+     * This buys nothing with a single reaper -- measured flat across batch
+     * sizes. It matters because there are several: every {@code remove()} and
+     * {@code poll()} takes the queue's monitor, so reapers contend on it once
+     * per handle, and amortising that over a batch was worth a further 21% at
+     * four threads.
+     */
+    private static final int DRAIN_BATCH = 64;
+
+    /** @see SwiftPtr#pauseReapers */
+    static volatile boolean PAUSED = false;
+
+    private static void reap() {
+      @SuppressWarnings("unchecked")
+      PhantomReference<Object>[] batch =
+        (PhantomReference<Object>[]) new PhantomReference<?>[DRAIN_BATCH];
+
+      while (true) {
+        int n = 0;
+        try {
+          while (PAUSED) LockSupport.parkNanos(200_000L);
+          @SuppressWarnings("unchecked")
+          PhantomReference<Object> first =
+            (PhantomReference<Object>) QUEUE.remove();
+          batch[n++] = first;
+
+          while (n < batch.length) {
+            java.lang.ref.Reference<?> more = QUEUE.poll();
+            if (more == null) break;
+            @SuppressWarnings("unchecked")
+            PhantomReference<Object> ref = (PhantomReference<Object>) more;
+            batch[n++] = ref;
+          }
+        } catch (InterruptedException ignored) {
+        } catch (Throwable ignored) {
+        }
+
+        // Outside the dequeue's catch: a failure while collecting the batch
+        // must still free what was already taken, or those handles leak with
+        // nothing left holding their reference.
+        for (int i = 0; i < n; i++) {
+          PhantomReference<Object> ref = batch[i];
+          batch[i] = null;
+          try {
             Cleanup cleanup = REFS.remove(ref);
             if (cleanup != null) {
               cleanup.free();
             }
-
             ref.clear();
-          } catch (InterruptedException ignored) {
           } catch (Throwable ignored) {
           }
         }
-      }, "SwiftPtr-Reaper");
-      reaper.setDaemon(true);
-      reaper.setPriority(Thread.NORM_PRIORITY + 1);
-      reaper.start();
+      }
+    }
+
+    static {
+      for (int i = 0; i < REAPER_THREADS; i++) {
+        Thread reaper = new Thread(Reaper::reap, "SwiftPtr-Reaper-" + i);
+        reaper.setDaemon(true);
+        reaper.setPriority(Thread.NORM_PRIORITY + 1);
+        reaper.start();
+      }
 
       Thread pressure = new Thread(() -> {
         long lastGcNs = System.nanoTime() - MIN_GC_INTERVAL_NS;
@@ -337,8 +411,10 @@ public final class SwiftPtr {
 
     /**
      * Runs on the dedicated pressure thread only. Never the caller (that is the
-     * UI stall we are trying to avoid) and never the reaper thread, which would
-     * deadlock a collection against the queue it is draining.
+     * UI stall we are trying to avoid) and never a reaper thread, which would
+     * deadlock a collection against the queue it is draining. Nothing in
+     * {@link #reap} reaches this, which is what keeps that true however many
+     * reapers there are.
      */
     private static void collect() {
       int before = LIVE.get();

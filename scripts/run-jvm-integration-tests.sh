@@ -115,6 +115,7 @@ find "$root/Sources/Swift4j/java" -name '*.java' >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/BridgeIntegrationTest.java" >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/DangerTest.java" >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/Bench.java" >> "$out/sources.txt"
+echo "$root/Tests/JvmIntegration/ReaperBench.java" >> "$out/sources.txt"
 
 "$JAVA_HOME/bin/javac" -nowarn -cp "$classes" -d "$classes" @"$out/sources.txt"
 
@@ -176,6 +177,19 @@ if [ "${BENCH:-0}" = "1" ]; then
     echo
     echo "==> bench"
     "$JAVA_HOME/bin/java" -Djava.library.path="$libdir" -cp "$runtime_cp" Bench || status=1
+fi
+
+# Reclamation throughput, which is a property of the reaper rather than of any
+# one accessor, so it is a separate run from the read-path bench above.
+if [ "${REAPER_BENCH:-0}" = "1" ]; then
+    echo
+    echo "==> reaper bench"
+    for mode in light heavy unique; do
+        "$JAVA_HOME/bin/java" \
+            -Djava.library.path="$libdir" \
+            -cp "$runtime_cp" \
+            ReaperBench "$mode" || status=1
+    done
 fi
 
 exit $status
