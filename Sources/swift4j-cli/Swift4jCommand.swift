@@ -29,6 +29,18 @@ struct Swift4jCommand: ParsableCommand {
           help: "External type to package mapping (TypeName=java.package)")
   var externalType: [String] = []
 
+  // Repeatable: `--value-type SwiftName=java.qualified.Name`. Declares that a
+  // Swift type crosses as a Java *value* rather than a pointer-backed peer,
+  // the way `Date` -> `java.util.Date` and `Data` -> `byte[]` already do. The
+  // Swift half is a hand-written `JObjectConvertible` conformance; this tells
+  // the codegen what to name in a parameter/return position and what to
+  // import. Only consulted after the built-in mappings, so `String`/`Int`/etc.
+  // cannot be redefined.
+  @Option(name: .long,
+          parsing: .upToNextOption,
+          help: "Swift type that bridges as a Java value (SwiftName=java.qualified.Name)")
+  var valueType: [String] = []
+
   @Flag(name: .long,
         help: "Scan mode: print discovered @jvm top-level type names (one per line) to stdout and exit. Does not write any files.")
   var scanTypes: Bool = false
@@ -73,7 +85,11 @@ struct Swift4jCommand: ParsableCommand {
     }
 
     let externalPackages = try parseExternalTypes()
-    let proxyGenerator = ProxyGenerator(package: package, javaVersion: javaVersion, externalPackages: externalPackages)
+    let valueTypes = try parseValueTypes()
+    let proxyGenerator = ProxyGenerator(package: package,
+                                        javaVersion: javaVersion,
+                                        externalPackages: externalPackages,
+                                        valueTypes: valueTypes)
     let viewModelGenerator = ViewModelsGenerator(package: package)
 
     for res in try proxyGenerator.run(paths: paths) {
@@ -98,6 +114,18 @@ struct Swift4jCommand: ParsableCommand {
       let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
       guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
         throw ValidationError("--external-type expects 'TypeName=java.package', got '\(entry)'")
+      }
+      map[parts[0]] = parts[1]
+    }
+    return map
+  }
+
+  private func parseValueTypes() throws -> [String: String] {
+    var map: [String: String] = [:]
+    for entry in valueType {
+      let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+        throw ValidationError("--value-type expects 'SwiftName=java.qualified.Name', got '\(entry)'")
       }
       map[parts[0]] = parts[1]
     }

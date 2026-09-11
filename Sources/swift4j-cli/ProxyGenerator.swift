@@ -26,11 +26,19 @@ class ProxyGenerator: SyntaxVisitor {
     /// used to qualify references to @jvm types defined in other Swift
     /// modules (own-module types resolve via the type registry instead).
     let externalPackages: [String: String]
+    /// Map of Swift type names to the fully-qualified Java type they bridge to
+    /// as a *value* rather than a pointer-backed peer. Populated from
+    /// `--value-type`; see the built-in `Date`/`Data` mappings it generalises.
+    let valueTypes: [String: String]
 
-    init(language: Language, registry: TypeRegistry, externalPackages: [String: String] = [:]) {
+    init(language: Language,
+         registry: TypeRegistry,
+         externalPackages: [String: String] = [:],
+         valueTypes: [String: String] = [:]) {
       self.language = language
       self.registry = registry
       self.externalPackages = externalPackages
+      self.valueTypes = valueTypes
     }
   }
 
@@ -39,9 +47,15 @@ class ProxyGenerator: SyntaxVisitor {
 
   private var typeGens: [TypeGeneratorProtocol] = []
 
-  init(package: String, javaVersion: Int, externalPackages: [String: String] = [:]) {
+  init(package: String,
+       javaVersion: Int,
+       externalPackages: [String: String] = [:],
+       valueTypes: [String: String] = [:]) {
     self.package = package
-    self.settings = Settings(language: .java(version: javaVersion), registry: TypeRegistry(), externalPackages: externalPackages)
+    self.settings = Settings(language: .java(version: javaVersion),
+                             registry: TypeRegistry(),
+                             externalPackages: externalPackages,
+                             valueTypes: valueTypes)
 
     super.init(viewMode: .fixedUp)
   }
