@@ -62,8 +62,8 @@ final class SerializedPeerTests: XCTestCase {
   func testSerializedPeerCarriesFieldsNotAPointer() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
-    XCTAssertTrue(snapshot.contains("private final Inner inner;"))
-    XCTAssertTrue(snapshot.contains("private final long count;"))
+    XCTAssertTrue(snapshot.contains("private Inner inner;"))
+    XCTAssertTrue(snapshot.contains("private long count;"))
     XCTAssertFalse(snapshot.contains("SwiftPtr"),
                    "a serialized peer holds no native memory")
   }
@@ -117,10 +117,34 @@ final class SerializedPeerTests: XCTestCase {
     }
   }
 
-  func testNoSetters() throws {
+  /// The edit-buffer pattern is copy, mutate, hand back — so a serialized peer
+  /// has to be writable. A read-only Swift declaration has nothing to write to
+  /// and stays final.
+  func testMutablePropertiesGetSettersAndReadOnlyOnesDoNot() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
-    XCTAssertFalse(snapshot.contains("setCount"),
-                   "a serialized peer is a snapshot; a write could not reach Swift")
+
+    XCTAssertTrue(snapshot.contains("public void setCount(long value)"))
+    XCTAssertTrue(snapshot.contains("this.count = value;"))
+    XCTAssertTrue(snapshot.contains("private long count;"),
+                  "a settable field cannot be final")
+
+    XCTAssertFalse(snapshot.contains("setFlag"),
+                   "a get-only computed property has no storage to write")
+    XCTAssertTrue(snapshot.contains("private final boolean flag;"))
+  }
+
+  /// An instance setter writes a Java field and does not reach through a
+  /// pointer, so marking it @SwiftMutating would claim something false. A
+  /// *static* setter still does write Swift storage and keeps the marker —
+  /// which is why this counts rather than just searching.
+  func testOnlyTheStaticSetterIsMarkedSwiftMutating() throws {
+    let snapshot = try XCTUnwrap(generate()["Snapshot"])
+
+    let marks = snapshot.components(separatedBy: "SwiftMutating").count - 1
+    XCTAssertEqual(marks, 1,
+                   "exactly one @SwiftMutating, on the static setter")
+    XCTAssertTrue(snapshot.contains("setVersion"),
+                  "the static property keeps its native-backed setter")
   }
 
   /// A static has no receiver to have been marshalled, so it stays

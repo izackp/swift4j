@@ -362,9 +362,15 @@ class VarGenerator {
     varDecl.isStatic ? [] : varDecl.decls
   }
 
+  /// Mutable unless the Swift declaration is read-only, because a serialized
+  /// peer is a *detached copy* and writing to one is how the edit-buffer
+  /// pattern works: copy, mutate, hand back. A `let` or a get-only computed
+  /// property has nothing to write to, so it stays final.
   func serializedFieldDecls(with ctx: inout Context) -> String {
-    serializedDecls.map { "  private final \($0.type.map(with: &ctx)) \($0.name);" }
-      .joined(separator: "\n")
+    serializedDecls.map {
+      let modifier = $0.readonly ? "private final" : "private"
+      return "  \(modifier) \($0.type.map(with: &ctx)) \($0.name);"
+    }.joined(separator: "\n")
   }
 
   /// `(Type name, ...)` fragments for the all-fields constructor, in
@@ -411,14 +417,29 @@ class VarGenerator {
     }
   }
 
-  /// Getters with the same names and return types the pointer-backed peer
-  /// emits, so consumers do not change. No setters: a serialized peer is a
-  /// snapshot, and a write to it could not reach the Swift value it came from.
+  /// Accessors with the same names and types the pointer-backed peer emits, so
+  /// consumers do not change.
+  ///
+  /// A setter writes the Java field rather than reaching through a pointer
+  /// into Swift storage. For the copy-mutate-hand-back pattern those are the
+  /// same thing, since the value is marshalled back on the next line. For a
+  /// peer nobody hands back, a write now stays local — which is the honest
+  /// behaviour for a detached copy, and the reason `@io.scade.swift4j.SwiftMutating`
+  /// is not emitted here: nothing Swift-side is being mutated.
   func generateSerialized(with ctx: inout Context) -> String {
     serializedDecls.map { decl in
+      let type = decl.type.map(with: &ctx)
+      let getter =
 """
-  public \(decl.type.map(with: &ctx)) get\(decl.capitalizedName)() {
+  public \(type) get\(decl.capitalizedName)() {
     return \(decl.name);
+  }
+"""
+      guard !decl.readonly else { return getter }
+      return getter + "\n\n" +
+"""
+  public void set\(decl.capitalizedName)(\(type) value) {
+    this.\(decl.name) = value;
   }
 """
     }.joined(separator: "\n\n")
