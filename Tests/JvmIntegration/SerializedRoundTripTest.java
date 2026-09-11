@@ -81,6 +81,16 @@ public final class SerializedRoundTripTest {
               SerializedBridge.makeRow().hashCode(),
               SerializedBridge.makeRow().hashCode());
 
+        // ---- the escape hatch: a type whose storage is not marshalled ----
+        // Opaque's only storage is @nonjvm, so the macro generates no
+        // reconstruction and the author supplies one. Round-tripping proves
+        // the hand-written fromJavaObject recovered the storage behind the
+        // computed facade, not just the facade.
+        Swift4jFixtures.Opaque opaque = SerializedBridge.makeOpaque();
+        check("opaque facade crosses", opaque.getText(), "1234567890123");
+        check("hand-written fromJavaObject recovers the storage",
+              SerializedBridge.opaqueRaw(opaque), "1234567890123");
+
         if (failures > 0) {
             System.out.println("\n" + failures + " serialized round-trip check(s) failed");
             System.exit(1);

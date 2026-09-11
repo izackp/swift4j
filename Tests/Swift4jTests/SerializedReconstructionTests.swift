@@ -96,6 +96,39 @@ final class SerializedReconstructionTests: XCTestCase {
     XCTAssertFalse(assigned.contains("version"))
   }
 
+  /// A hand-written conversion is a bridge witness, not API. Bridging one
+  /// yields a Java method taking `JavaObject` — which has no Java mapping — and
+  /// registers a native nothing provides. Normally these are macro-generated
+  /// and never seen by the generators; they only appear once an author writes
+  /// one, which the non-reconstructible case requires.
+  func testBridgeWitnessesAreNotBridgedAsApi() {
+    let source = Parser.parse(source: """
+    extension Opaque {
+      public static func fromJavaObject(_ obj: JavaObject?) -> Opaque { fatalError() }
+      public func toJavaObject() -> JavaObject? { nil }
+      public static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer) -> JavaObject? { nil }
+      public func toJavaParameter() -> JavaParameter { fatalError() }
+      public func realApi() -> Int { 0 }
+    }
+    """)
+
+    var verdicts: [String: Bool] = [:]
+    for stmt in source.statements {
+      guard let ext = stmt.item.as(ExtensionDeclSyntax.self) else { continue }
+      for member in ext.memberBlock.members {
+        guard let fn = member.decl.as(FunctionDeclSyntax.self) else { continue }
+        verdicts[fn.name.text] = fn.isBridgeable(typeConformsToHashable: false)
+      }
+    }
+
+    XCTAssertEqual(verdicts["fromJavaObject"], false)
+    XCTAssertEqual(verdicts["toJavaObject"], false)
+    XCTAssertEqual(verdicts["fromUnownedPointer"], false)
+    XCTAssertEqual(verdicts["toJavaParameter"], false)
+    XCTAssertEqual(verdicts["realApi"], true,
+                   "an ordinary method in the same extension is still bridged")
+  }
+
   /// Outbound carries the computed property; inbound does not. The asymmetry is
   /// deliberate and worth pinning, since the constructor descriptor is built
   /// from the outbound list and a reconstruction from the inbound one.

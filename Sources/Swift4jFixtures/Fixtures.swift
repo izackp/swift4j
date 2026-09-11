@@ -301,6 +301,16 @@ public class SerializedBridge {
   public static func idAfterEdit(_ row: SerializedRow) -> Int {
     return row.id
   }
+
+  public static func makeOpaque() -> Opaque {
+    return Opaque(raw: 1234567890123)
+  }
+
+  /// Goes through the hand-written `fromJavaObject`, so it proves the storage
+  /// behind the marshalled facade was actually recovered.
+  public static func opaqueRaw(_ value: Opaque) -> String {
+    return String(value.raw)
+  }
 }
 
 /// A pointer-backed type holding a *serialized* member.
@@ -323,5 +333,49 @@ public struct HoldsSerialized {
     self.leaf = leaf
     self.optionalLeaf = optionalLeaf
     self.leaves = leaves
+  }
+}
+
+/// The `LcUUID` shape: all marshalled members are computed, and the only
+/// storage is opted out of bridging. The macro cannot generate a
+/// reconstruction — it would assign defaults and hand back a valid-looking
+/// value for the wrong thing — so it emits none, and the author supplies one.
+///
+/// Compiling this proves the escape hatch works at all: the macro adds a
+/// `: JObjectConvertible` conformance whose `fromJavaObject` requirement is
+/// satisfied from a *separate* extension, which is the only reason a
+/// hand-written conversion can coexist with a generated `toJavaObject`.
+@jvm(serialized: true)
+public struct Opaque {
+  @nonjvm public private(set) var raw: UInt64
+
+  public var text: String { String(raw) }
+
+  @nonjvm public init(raw: UInt64) {
+    self.raw = raw
+  }
+}
+
+extension Opaque {
+  private enum __JavaMethods__ {
+    static let getText: JavaMethodID = {
+      guard let mid = Opaque.javaClass.getMethodID(name: "getText", sig: "()Ljava/lang/String;") else {
+        fatalError("Could not find Opaque.getText")
+      }
+      return mid
+    } ()
+  }
+
+  /// Reads the marshalled surface and rebuilds the storage behind it. Resolved
+  /// method id, not a string-keyed lookup: this runs once per value crossing.
+  public static func fromJavaObject(_ obj: JavaObject?) -> Opaque {
+    guard let obj else {
+      fatalError("Opaque.fromJavaObject received null")
+    }
+    let text: String = JObject(obj).call(method: __JavaMethods__.getText)
+    guard let raw = UInt64(text) else {
+      fatalError("Opaque.fromJavaObject: could not parse \(text)")
+    }
+    return Opaque(raw: raw)
   }
 }
