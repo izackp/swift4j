@@ -260,3 +260,45 @@ public struct SerializedRow {
 
   public static func describe() -> String { "row" }
 }
+
+/// Entry points for the JVM round-trip test. Compiling the fixtures proves the
+/// expansion type-checks; only running these proves the constructor descriptor,
+/// the argument order and the nested conversions are actually right.
+@jvm
+public class SerializedBridge {
+
+  public static func makeRow() -> SerializedRow {
+    return SerializedRow(
+      id: 42,
+      name: "hello",
+      stamp: Date(timeIntervalSince1970: 1_700_000_000),
+      handleLeaf: Leaf(label: "leaf", count: 7),
+      serializedLeaf: SerializedLeaf(label: "inner", weight: 2.5))
+  }
+
+  public static func makeRowWithNilName() -> SerializedRow {
+    return SerializedRow(
+      id: 0,
+      name: nil,
+      stamp: Date(timeIntervalSince1970: 0),
+      handleLeaf: Leaf(label: "", count: 0),
+      serializedLeaf: SerializedLeaf(label: "", weight: 0))
+  }
+
+  /// Java -> Swift. Renders what Swift actually received, so a field that
+  /// arrives in the wrong slot is visible rather than merely unequal.
+  public static func describe(_ row: SerializedRow) -> String {
+    return "id=\(row.id)"
+      + " name=\(row.name ?? "nil")"
+      + " stamp=\(Int(row.stamp.timeIntervalSince1970))"
+      + " handleLeaf=\(row.handleLeaf.label):\(row.handleLeaf.count)"
+      + " serializedLeaf=\(row.serializedLeaf.label):\(row.serializedLeaf.weight)"
+      + " flag=\(row.flag)"
+  }
+
+  /// Round-trips a value the Java side mutated, which is the edit-buffer shape:
+  /// copy out, write fields, hand back.
+  public static func idAfterEdit(_ row: SerializedRow) -> Int {
+    return row.id
+  }
+}

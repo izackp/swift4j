@@ -182,6 +182,26 @@ extension JvmTypeDeclSyntax {
     // all-fields constructor, which `toJavaObject` calls.
     if isSerialized {
       let ctorSig = (try? serializedCtorSignature()) ?? "()V"
+
+      // One cached id per getter, resolved on first use. A string-keyed
+      // GetMethodID per field per object would be paid thousands of times a
+      // snapshot. Only emitted where a reconstruction exists to use them.
+      let getterIds = isSerializedReconstructible
+        ? serializedStoredProperties.compactMap { prop -> String? in
+            guard let jniType = try? prop.type.jniSignature() else { return nil }
+            let getter = "get\(prop.capitalizedName)"
+            return
+"""
+  static let \(getter): JavaMethodID = {
+    guard let mid = shared.getMethodID(name: "\(getter)", sig: "()\(jniType)") else {
+      fatalError("Could not find \(fqn).\(getter)")
+    }
+    return mid
+  } ()
+"""
+          }.joined(separator: "\n")
+        : ""
+
       return
 """
 private enum __JClass__ {
@@ -198,6 +218,7 @@ private enum __JClass__ {
     }
     return mid
   } ()
+\(getterIds)
 }
 
 public nonisolated static var javaName: String { __JClass__.name }
@@ -288,6 +309,41 @@ extension JvmTypeDeclSyntax {
   func serializedCtorSignature() throws -> String {
     let params = try serializedProperties.map { try $0.type.jniSignature() }
     return "(\(params.joined()))V"
+  }
+
+  /// Marshalled instance properties that have storage — the ones a
+  /// reconstruction has to assign. Computed properties are marshalled outbound
+  /// and ignored inbound, since assigning one is not possible.
+  var serializedStoredProperties: [VariableDeclSyntax.VarDecl] {
+    exportedDecls.varDecls
+      .filter { !$0.isStatic }
+      .flatMap { $0.decls }
+      .filter { !$0.computed }
+  }
+
+  /// Whether a Java value of this type carries enough to rebuild the Swift one.
+  ///
+  /// False when the type has a stored property that is not marshalled — a
+  /// `@nonjvm` one, typically. `LcUUID` is the case that matters: its only
+  /// storage is `@nonjvm uuid: uuid_t`, so a generated reconstruction would
+  /// quietly produce a zero UUID, which is a *valid-looking identifier for the
+  /// wrong row*. Better to emit nothing and let the conformance fail to
+  /// compile, which tells the author exactly where to write it by hand.
+  var isSerializedReconstructible: Bool {
+    for member in memberBlock.members {
+      guard let decl = member.decl.as(VariableDeclSyntax.self),
+            !decl.isStatic else { continue }
+      // A declaration with no type annotation is invisible to `decls`, so it
+      // could not be assigned even if it were exported.
+      let storedNames = decl.bindings.compactMap { binding -> String? in
+        guard binding.accessorBlock == nil else { return nil }
+        return binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+      }
+      guard !storedNames.isEmpty else { continue }
+      if !decl.isExported { return false }
+      if decl.decls.count != storedNames.count { return false }
+    }
+    return true
   }
 
   func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax], namespacePath: [String] = []) throws -> [String] {

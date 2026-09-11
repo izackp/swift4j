@@ -49,13 +49,40 @@ extension JvmValueTypeDeclSyntax {
     // to derive and no borrow to hand out. What remains is the pair of
     // conversions.
     if isSerialized {
+      // Not reconstructible: emit `toJavaObject` only. The missing
+      // `fromJavaObject` makes the JObjectConvertible conformance fail to
+      // compile, which names the type and points the author at the one file
+      // where a hand-written conversion belongs. Emitting a fatalError instead
+      // would push the same problem to runtime and collide with any
+      // hand-written version.
+      guard isSerializedReconstructible else {
+        return
+"""
+public func toJavaObject() -> JavaObject? {
+  \(expandToJavaObject(in: context))
+}
+"""
+      }
+
+      // Assign every stored property from its Java getter. Computed properties
+      // are marshalled outbound and skipped here, since there is nothing to
+      // assign. The type of each `call` is inferred from the property being
+      // assigned, so a nested peer recurses through its own `fromJavaObject`.
+      let assignments = serializedStoredProperties.map {
+        "  self.\($0.name) = _jvmSource.call(method: __JClass__.get\($0.capitalizedName))"
+      }.joined(separator: "\n")
+
       return
 """
+public init(_jvmFrom _jvmSource: JObject) {
+\(assignments)
+}
+
 public static func fromJavaObject(_ obj: JavaObject?) -> Self {
-  fatalError(
-    "\(typeName).fromJavaObject is not implemented for a serialized type. "
-    + "Reconstruction needs every stored property to be recoverable from the "
-    + "marshalled surface; write the conformance by hand where it is not.")
+  guard let obj else {
+    fatalError("\(typeName).fromJavaObject received null")
+  }
+  return Self(_jvmFrom: JObject(obj))
 }
 
 public func toJavaObject() -> JavaObject? {

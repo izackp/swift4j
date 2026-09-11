@@ -116,6 +116,7 @@ echo "$root/Tests/JvmIntegration/BridgeIntegrationTest.java" >> "$out/sources.tx
 echo "$root/Tests/JvmIntegration/DangerTest.java" >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/Bench.java" >> "$out/sources.txt"
 echo "$root/Tests/JvmIntegration/ReaperBench.java" >> "$out/sources.txt"
+echo "$root/Tests/JvmIntegration/SerializedRoundTripTest.java" >> "$out/sources.txt"
 
 "$JAVA_HOME/bin/javac" -nowarn -cp "$classes" -d "$classes" @"$out/sources.txt"
 
@@ -131,6 +132,12 @@ echo "==> running"
     -Djava.library.path="$libdir" \
     -cp "$runtime_cp" \
     BridgeIntegrationTest || status=1
+
+echo "==> serialized round trip"
+"$JAVA_HOME/bin/java" \
+    -Djava.library.path="$libdir" \
+    -cp "$runtime_cp" \
+    SerializedRoundTripTest || status=1
 
 if [ "$kt_count" != "0" ] && [ "$kotlin_ok" = "1" ]; then
     "$JAVA_HOME/bin/java" \
