@@ -120,6 +120,9 @@ extension JvmTypeDeclSyntax {
   /// Swift members, not as bridged methods). `Int.hashValue` is truncated
   /// into the 32-bit `jint` that Java's `hashCode()` contract requires.
   func expandHashableDecls(in context: some MacroExpansionContext) -> String {
+    // A serialized peer gets real value equality generated in Java, so these
+    // thunks would be registered against methods the peer does not declare.
+    guard !isSerialized else { return "" }
     guard conformsToHashable else { return "" }
     let selfExpr = self.selfExpr
     let otherExpr = selfExpr.replacingOccurrences(of: "ptr", with: "otherPtr")
@@ -173,6 +176,35 @@ extension JvmTypeDeclSyntax {
 extension JvmTypeDeclSyntax {
   func expandJavaClassDeclDefault(in context: some MacroExpansionContext) -> String {
     let fqn = fqn(from: context)
+
+    // A serialized peer declares no `fromPtr` / `fromUnownedPtr`, so resolving
+    // them would fatalError at class-init. What it does declare is the
+    // all-fields constructor, which `toJavaObject` calls.
+    if isSerialized {
+      let ctorSig = (try? serializedCtorSignature()) ?? "()V"
+      return
+"""
+private enum __JClass__ {
+  static let name = "\(fqn)"
+  static let shared = {
+    guard let cls = JClass(fqn: javaName) else {
+      fatalError("Could not find \\(javaName) class")
+    }
+    return cls
+  } ()
+  static let ctor: JavaMethodID = {
+    guard let mid = shared.getMethodID(name: "<init>", sig: "\(ctorSig)") else {
+      fatalError("Could not find \(fqn).<init>\(ctorSig)")
+    }
+    return mid
+  } ()
+}
+
+public nonisolated static var javaName: String { __JClass__.name }
+public nonisolated static var javaClass: JClass { __JClass__.shared }
+"""
+    }
+
     return
 """
 private enum __JClass__ {
@@ -225,6 +257,11 @@ public nonisolated static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer
     return exportedDecls.funcDecls
       .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
       .enumerated()
+      // A serialized peer has no pointer for an instance method to dispatch
+      // on, so only statics get a thunk. Filtered *after* enumerating so the
+      // surviving indices match the names `expandCreateNativeMethods`
+      // registers.
+      .filter { !isSerialized || $0.element.isStatic }
       .compactMap { i, decl in
         return context.executeAndWarnIfFails(at: decl) {
           return try decl.makeBridgingDecls(typeDecl: self, num: i)
@@ -236,6 +273,23 @@ public nonisolated static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer
 
 
 extension JvmTypeDeclSyntax {
+
+  /// The instance properties a serialized peer materialises as Java fields,
+  /// paired with the declaration they came from.
+  ///
+  /// Must stay in step with `VarGenerator.serializedDecls` on the CLI side:
+  /// the constructor's parameter order is agreed between them and nothing
+  /// sorts.
+  var serializedProperties: [VariableDeclSyntax.VarDecl] {
+    exportedDecls.varDecls.filter { !$0.isStatic }.flatMap { $0.decls }
+  }
+
+  /// JNI descriptor for the all-fields constructor the CLI emits.
+  func serializedCtorSignature() throws -> String {
+    let params = try serializedProperties.map { try $0.type.jniSignature() }
+    return "(\(params.joined()))V"
+  }
+
   func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax], namespacePath: [String] = []) throws -> [String] {
     // Swift-side dispatch target: `(namespace+)?(parents+)?self.<member>`.
     // Namespace segments aren't real Swift types; the call target is the
@@ -243,6 +297,39 @@ extension JvmTypeDeclSyntax {
     // qualify only via real `parents`.
     let fqn = fqn(with: parents)
     let exportedDecls = exportedDecls
+
+    // A serialized peer has no pointer, so every native that takes one is
+    // gone: the accessors (now field reads), deinit, copy, and the Hashable
+    // bridge (the CLI writes equals/hashCode in Java). Statics keep theirs —
+    // a static has no receiver to have been marshalled.
+    //
+    // RegisterNatives fails the whole batch on a native the peer does not
+    // declare, so this list and ClassGenerator's serialized template have to
+    // agree exactly. Both key off the same `isSerialized`.
+    if isSerialized {
+      let staticVarNatives: [String] = exportedDecls.varDecls.filter { $0.isStatic }.flatMap { decl in
+        guard let bridgings = try? decl.bridgings(typeDecl: self) else { return [String]() }
+        return bridgings.map {
+          expandCreateNativeMethod(name: $0.javaName, sig: $0.sig, fn: "\(fqn).\($0.bridgeName)")
+        }
+      }
+
+      // Enumerate first, filter second. The thunk's name embeds its index in
+      // the *bridgeable* list (`expandFuncDecls` numbers them the same way), so
+      // dropping instance methods before enumerating would renumber the
+      // statics and name symbols that do not exist.
+      let staticFuncNatives: [String] = exportedDecls.funcDecls
+        .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
+        .enumerated()
+        .filter { $0.element.isStatic }
+        .compactMap { (index, decl) in
+          guard let jniSig = try? decl.jniSignature() else { return nil }
+          let bridge = decl.bridgeName
+          return expandCreateNativeMethod(name: "\(bridge)Impl", sig: jniSig, fn: "\(fqn).\(bridge)_\(index)_jni")
+        }
+
+      return staticVarNatives + staticFuncNatives
+    }
 
     let varNatives: [String] = exportedDecls.varDecls.flatMap { decl in
       guard let bridgings = try? decl.bridgings(typeDecl: self) else { return [String]() }
@@ -317,12 +404,17 @@ extension JvmTypeDeclSyntax {
       cls_expr = "jni.FindClass(\"\(jfqn)\")"
     }
 
+    // A serialized type with no statics registers nothing, and a bare `[]` has
+    // no inferrable element type. Keep the call rather than skipping it: the
+    // Java peer still declares `<Name>_class_init`, so the symbol has to exist.
+    let nativesLiteral = natives.isEmpty
+      ? "[JNINativeMethod2]()"
+      : "[\n    \(natives.joined(separator: ",\n"))\n  ]"
+
     let registerNatives =
 """
   guard let \(chainForVar)_cls = \(cls_expr) else { return }
-  let \(chainForVar)_natives = [
-    \(natives.joined(separator: ",\n"))
-  ]
+  let \(chainForVar)_natives = \(nativesLiteral)
   let _ = jni.RegisterNatives(\(chainForVar)_cls, \(chainForVar)_natives)
 
   \(try exportedDecls.typeDecls

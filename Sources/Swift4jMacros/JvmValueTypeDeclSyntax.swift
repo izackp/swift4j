@@ -45,6 +45,26 @@ return JavaLong(Int(bitPattern: ptr))
 
 extension JvmValueTypeDeclSyntax {
   func expandJavaObjectDeclsAsClass(in context: some MacroExpansionContext) throws -> String {
+    // A serialized peer holds fields, not an address, so there is no `_self`
+    // to derive and no borrow to hand out. What remains is the pair of
+    // conversions.
+    if isSerialized {
+      return
+"""
+public static func fromJavaObject(_ obj: JavaObject?) -> Self {
+  fatalError(
+    "\(typeName).fromJavaObject is not implemented for a serialized type. "
+    + "Reconstruction needs every stored property to be recoverable from the "
+    + "marshalled surface; write the conformance by hand where it is not.")
+}
+
+public func toJavaObject() -> JavaObject? {
+  \(expandToJavaObject(in: context))
+}
+"""
+    }
+
+    return
 """
 private static func _self(_ obj: JavaObject?) -> UnsafeMutablePointer<\(typeName)> {
   let ptr: JavaLong = JObject(obj!).call(method: "_ptr")
@@ -71,6 +91,11 @@ public func toJavaObject() -> JavaObject? {
   }
 
   func expandCtorDeclsAsClass(in context: some MacroExpansionContext) throws -> String {
+    // Nothing here applies to a serialized peer: there is no allocation to
+    // free (deinit_jni), no address to duplicate (copy_jni), and the CLI emits
+    // no Java constructor backed by an `init0` native.
+    if isSerialized { return "" }
+
     let initDecls = exportedDecls.initDecls.enumerated()
       .compactMap { i, decl in
         return context.executeAndWarnIfFails(at: decl) {

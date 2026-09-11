@@ -210,3 +210,53 @@ public struct UsesNamespaced {
   public var inner: Nested.Inner
   public init(inner: Nested.Inner) { self.inner = inner }
 }
+
+// MARK: - Serialized peers
+
+/// `@jvm(serialized: true)`: the Java peer carries copied fields instead of a
+/// `SwiftPtr`, so it holds no native memory and ordinary Java GC reclaims it.
+///
+/// This target asserts nothing, and that is the point — `toJavaObject` here
+/// calls a constructor whose JNI descriptor the macro builds from the property
+/// types. A descriptor that does not type-check, or a property type with no
+/// `toJavaParameter`, is a build failure at this line instead of an
+/// `UnsatisfiedLinkError` on a device.
+///
+/// Covers the shapes that differ: a primitive, a `String?`, a conversion-bridged
+/// `Date`, a nested *handle* peer (`Leaf`, which still boxes a pointer), a
+/// nested *serialized* peer (`SerializedLeaf`, which recurses into its own
+/// copy), a get-only computed property (evaluated once at marshal time, and
+/// final on the Java side), and a static (which keeps its native, because it
+/// has no receiver to have been marshalled).
+@jvm(serialized: true)
+public struct SerializedLeaf {
+  public var label: String
+  public var weight: Double
+
+  public init(label: String, weight: Double) {
+    self.label = label
+    self.weight = weight
+  }
+}
+
+@jvm(serialized: true)
+public struct SerializedRow {
+  public var id: Int
+  public var name: String?
+  public var stamp: Date
+  public var handleLeaf: Leaf
+  public var serializedLeaf: SerializedLeaf
+  public var flag: Bool { id > 0 }
+
+  public static var schemaVersion: Int = 1
+
+  public init(id: Int, name: String?, stamp: Date, handleLeaf: Leaf, serializedLeaf: SerializedLeaf) {
+    self.id = id
+    self.name = name
+    self.stamp = stamp
+    self.handleLeaf = handleLeaf
+    self.serializedLeaf = serializedLeaf
+  }
+
+  public static func describe() -> String { "row" }
+}

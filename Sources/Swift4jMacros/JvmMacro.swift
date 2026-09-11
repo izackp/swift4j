@@ -24,6 +24,15 @@ public struct JvmMacro {
     }
   }
 
+  /// `isSerialized` lives on `TypeDeclSyntax`; the macro entry points receive
+  /// a `DeclGroupSyntax`, so it has to be reached through the concrete case.
+  static func isSerialized(_ declaration: some DeclGroupSyntax) -> Bool {
+    if let decl = declaration.as(StructDeclSyntax.self) { return decl.isSerialized }
+    if let decl = declaration.as(ClassDeclSyntax.self) { return decl.isSerialized }
+    if let decl = declaration.as(EnumDeclSyntax.self) { return decl.isSerialized }
+    return false
+  }
+
   static func assert(context: some MacroExpansionContext) throws {
     if let enclosingDeclType = context.enclosingDeclType {
       if !enclosingDeclType.isExported {
@@ -85,6 +94,12 @@ extension JvmMacro: MemberAttributeMacro {
                                in context: some SwiftSyntaxMacros.MacroExpansionContext) throws -> [SwiftSyntax.AttributeSyntax] {
 
     if let decl = member.as(VariableDeclSyntax.self), decl.isExported {
+      // On a serialized type an instance property is a Java field, so the
+      // accessor thunks `@jvm_exported` generates would be registered against
+      // methods the peer does not declare. Statics keep theirs.
+      if isSerialized(declaration) && !decl.isStatic {
+        return []
+      }
       return [AttributeSyntax(stringLiteral: "@jvm_exported")]
     }
 
@@ -130,8 +145,12 @@ extension JvmMacro: ExtensionMacro {
     // scoped borrow hand Java a peer around an address it does not own. A
     // class's peer already refers to the object itself, and taking the address
     // of a class-typed property would yield the address of the reference.
+    // A serialized peer has no address to lend, so it cannot satisfy
+    // JvmPointerBoxed's `fromUnownedPointer` and must not claim to.
     let isValueType = declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self)
-    let conformances = isValueType ? "JObjectConvertible, JvmPointerBoxed" : "JObjectConvertible"
+    let conformances = (isValueType && !isSerialized(declaration))
+      ? "JObjectConvertible, JvmPointerBoxed"
+      : "JObjectConvertible"
 
     let extSyntax =
 """
