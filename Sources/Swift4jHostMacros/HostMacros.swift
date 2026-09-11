@@ -27,7 +27,7 @@
             named(deinit_jni),
             arbitrary)
 @attached(memberAttribute)
-public macro jvm() =
+public macro jvm(serialized: Bool = false) =
   #externalMacro(module: "Swift4jMacros", type: "JvmMacro")
 
 @attached(peer,

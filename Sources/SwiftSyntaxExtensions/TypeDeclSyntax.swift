@@ -30,6 +30,26 @@ public extension TypeDeclSyntax {
     return AttributeListSyntax(attrs)
   }
 
+  /// Whether this type was declared `@jvm(serialized: true)`: its Java peer
+  /// carries copied fields instead of a `SwiftPtr`, so it holds no native
+  /// memory and is reclaimed by ordinary Java GC.
+  ///
+  /// Read from the attribute rather than inferred, because the choice is a
+  /// lifetime contract ("valid until the next snapshot") that only the author
+  /// can make. Defaults to false, so every existing `@jvm` type is unaffected.
+  var isSerialized: Bool {
+    for element in exportAttributes {
+      guard case .attribute(let attr) = element,
+            case .argumentList(let args)? = attr.arguments else { continue }
+
+      for arg in args where arg.label?.text == "serialized" {
+        guard let literal = arg.expression.as(BooleanLiteralExprSyntax.self) else { continue }
+        return literal.literal.tokenKind == .keyword(.true)
+      }
+    }
+    return false
+  }
+
   var parents: [any TypeDeclSyntax] {
     var parents: [any TypeDeclSyntax] = []
     var cur: any TypeDeclSyntax = self

@@ -22,7 +22,7 @@ public enum Platform: Equatable {
             named(deinit_jni),
             arbitrary)
 @attached(memberAttribute)
-public macro jvm() =
+public macro jvm(serialized: Bool = false) =
   #externalMacro(module: "Swift4jMacros", type: "JvmMacro")
 
 
@@ -61,7 +61,7 @@ public macro nonjvm() =
 // Non-Android: stub macros. JVM bridging members aren't generated; iOS/macOS
 // consumers see the annotated types as plain Swift declarations.
 @attached(peer)
-public macro jvm() =
+public macro jvm(serialized: Bool = false) =
   #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
