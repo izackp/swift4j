@@ -15,6 +15,10 @@ struct JavaTypeProxy : TypeProxy {
   /// becomes `<basePackage>/Server/Subject.java` with package
   /// `<basePackage>.Server`.
   var namespacePath: [String] = []
+  /// A serialized peer holds no pointer, so importing `SwiftPtr` would be a
+  /// visible lie about what the class is — and the only signal a reader has
+  /// that it is not a handle.
+  var needsSwiftPtr: Bool = true
   let source: String
 
   func generate(in package: String, with imports: any Collection<String>) -> (filename: String, source: String) {
@@ -34,9 +38,7 @@ struct JavaTypeProxy : TypeProxy {
     let content =
 """
 package \(fullPackage);
-
-import io.scade.swift4j.SwiftPtr;
-
+\(needsSwiftPtr ? "\nimport io.scade.swift4j.SwiftPtr;\n" : "")
 \(importLines.joined(separator: "\n"))
 
 \(source)

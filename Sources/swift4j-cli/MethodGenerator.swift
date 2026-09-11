@@ -8,6 +8,12 @@ class MethodGenerator {
   typealias Context = ProxyGenerator.Context
 
   private let funcDecl: FunctionDeclSyntax
+
+  /// A serialized peer keeps statics (they have no receiver to have been
+  /// marshalled) and drops instance methods (there is no pointer to dispatch
+  /// on). The macro reads the same distinction, so the registered native set
+  /// stays in agreement.
+  var isStatic: Bool { funcDecl.isStatic }
   private let className: String
 
   var name: String { funcDecl.name.text }

@@ -33,7 +33,134 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
 
 
 extension ClassGenerator: TypeGeneratorProtocol {
+
+  /// Shared by both peer shapes. A serialized peer still registers natives —
+  /// statics keep theirs — and even with none, `_class_init` must exist on the
+  /// Java side because the macro emits the peer that calls it unconditionally.
+  private var classInitBlock: String {
+    var block =
+"""
+  static {
+    \((registryParents.first ?? typeDecl).typeName).class_init();
+  }
+"""
+    if !nested {
+      block +=
+"""
+
+
+  private static void class_init() {
+    if(!class_initialized) {
+      \(name)_class_init();
+      class_initialized = true;
+    }
+  }
+  private static boolean class_initialized = false;
+  private static native void \(name)_class_init();
+"""
+    }
+    return block
+  }
+
+  /// A peer that carries copied fields instead of a `SwiftPtr`.
+  ///
+  /// Everything that exists only to own or borrow an address is gone: no
+  /// `_ptr`, no `deinit`, no `copy()`, no `Borrowed`, no `unsafeWith*`, no
+  /// cache, and no setters. The public getter names and return types are
+  /// unchanged, which is the point — a consumer reading `getFirstName()` does
+  /// not learn that the object stopped being a handle.
+  ///
+  /// What survives is statics. A static has no receiver to have been
+  /// marshalled, so it stays native-backed exactly as before. Instance methods
+  /// do not survive: there is no pointer to dispatch on, and the macro drops
+  /// their natives from the same `isSerialized` check, so the registered set
+  /// stays in agreement.
+  private func generateSerialized(with ctx: inout Context) -> TypeProxy {
+    let instanceVars = varGens.filter { !$0.isStatic }
+    let staticVars = varGens.filter { $0.isStatic }
+    let staticMethods = methodGens.filter { $0.isStatic }
+
+    let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx) }
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n")
+
+    let ctorParams = instanceVars.flatMap { $0.serializedCtorParams(with: &ctx) }
+    let assignments = instanceVars.flatMap { $0.serializedAssignments() }
+    let comparisons = instanceVars.flatMap { $0.serializedFieldComparisons(with: &ctx) }
+    let fieldNames = comparisons.map { $0.name }
+
+    // Called by the macro's `toJavaObject`, so it must be public and its
+    // parameter order must match declaration order on both sides.
+    let ctor =
+"""
+  public \(name)(\(ctorParams.joined(separator: ", "))) {
+\(assignments.joined(separator: "\n"))
+  }
+"""
+
+    let accessors = instanceVars.map { $0.generateSerialized(with: &ctx) }
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n\n")
+
+    let staticMembers = (staticVars.map { $0.generate(with: &ctx) }
+                         + staticMethods.map { $0.generate(with: &ctx) })
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n\n")
+
+    // Real value equality, which a pointer-backed peer could not offer. Two
+    // snapshots of the same row taken either side of an unrelated write are
+    // equal here and were two distinct objects before.
+    let equality = fieldNames.isEmpty ? "" :
+"""
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) return true;
+    if (!(o instanceof \(name))) return false;
+    \(name) other = (\(name)) o;
+    return \(comparisons.map { $0.expression }.joined(separator: "\n        && "));
+  }
+
+  @Override
+  public int hashCode() {
+    return java.util.Objects.hash(\(fieldNames.joined(separator: ", ")));
+  }
+"""
+
+    let nestedSources = nestedTypeGens.compactMap { gen -> String? in
+      let proxy = gen.generate(with: &ctx)
+      guard proxy is JavaTypeProxy else { return nil }
+      return proxy.source
+    }.joined(separator: "\n\n")
+
+    let source =
+"""
+public \(nested ? "static" : "") class \(name) {
+
+\(classInitBlock)
+
+\(fields)
+
+\(ctor)
+
+\(accessors)
+\(equality)
+\(staticMembers)
+
+\(nestedSources)
+}
+"""
+
+    return JavaTypeProxy(name: name,
+                         namespacePath: namespacePath,
+                         needsSwiftPtr: false,
+                         source: source)
+  }
+
   func generate(with ctx: inout Context) -> TypeProxy {
+    if typeDecl.isSerialized {
+      return generateSerialized(with: &ctx)
+    }
     // Only a type that hands out a scope needs the flag, and only such a type
     // can be re-entered while one is open.
     let hasScope = varGens.contains { $0.exposesAnyScopedBorrow }
@@ -58,27 +185,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
       return gen.generate(with: &ctx, index: index, failableOrdinal: failableOrdinal)
     }.joined(separator: "\n\n")
 
-    var class_init =
-"""
-  static {
-    \((registryParents.first ?? typeDecl).typeName).class_init();
-  }
-"""
-
-    if !nested {
-      class_init +=
-"""
-
-  private static void class_init() {
-    if(!class_initialized) {
-      \(name)_class_init();
-      class_initialized = true;
-    }
-  }
-  private static boolean class_initialized = false;
-  private static native void \(name)_class_init();
-"""
-    }
+    let class_init = classInitBlock
 
     // When the Swift type conforms to `Error` / `LocalizedError`, emit the
     // Java class as a Throwable subtype so JNI throws land as a typed

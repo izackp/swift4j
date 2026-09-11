@@ -16,6 +16,11 @@ class VarGenerator {
     varDecl.isStatic ? "static" : ""
   }
 
+  /// A serialized peer materialises instance properties as fields and leaves
+  /// statics native-backed, since a static has no receiver to have been
+  /// marshalled.
+  var isStatic: Bool { varDecl.isStatic }
+
   private var callee: String {
     varDecl.isStatic ? className : "this"
   }
@@ -343,6 +348,80 @@ class VarGenerator {
 
 \(nativeDecl)
 """
+  }
+
+  // MARK: - Serialized peers
+
+  /// The instance properties a serialized peer materialises as Java fields.
+  ///
+  /// Computed properties are included. A serialized peer holds no pointer, so
+  /// nothing can be evaluated later — a computed property is either evaluated
+  /// once at marshal time or not exposed at all. `@nonjvm` remains the opt-out
+  /// for one that should not be paid for.
+  var serializedDecls: [VariableDeclSyntax.VarDecl] {
+    varDecl.isStatic ? [] : varDecl.decls
+  }
+
+  func serializedFieldDecls(with ctx: inout Context) -> String {
+    serializedDecls.map { "  private final \($0.type.map(with: &ctx)) \($0.name);" }
+      .joined(separator: "\n")
+  }
+
+  /// `(Type name, ...)` fragments for the all-fields constructor, in
+  /// declaration order. The macro builds its `toJavaObject` argument list from
+  /// the same order, which is why neither side may sort.
+  func serializedCtorParams(with ctx: inout Context) -> [String] {
+    serializedDecls.map { "\($0.type.map(with: &ctx)) \($0.name)" }
+  }
+
+  func serializedAssignments() -> [String] {
+    serializedDecls.map { "    this.\($0.name) = \($0.name);" }
+  }
+
+  func serializedFieldNames() -> [String] {
+    serializedDecls.map { $0.name }
+  }
+
+  /// Java's eight primitive names. A field typed as one of these must be
+  /// compared with `==`, not `Objects.equals`, which would box both sides —
+  /// paid per field per row on a diffing path.
+  private static let javaPrimitiveNames: Set<String> = [
+    "boolean", "byte", "short", "int", "long", "float", "double", "char"
+  ]
+
+  /// Per-field equality for the generated `equals`, paired with the field name
+  /// so `hashCode` stays in the same order.
+  ///
+  /// `float` and `double` go through `compare` rather than `==` so that NaN
+  /// equals NaN and -0.0 does not equal 0.0 — which is what `hashCode` already
+  /// assumes, and the pairing is what the equals/hashCode contract requires.
+  func serializedFieldComparisons(with ctx: inout Context) -> [(name: String, expression: String)] {
+    serializedDecls.map { decl in
+      let type = decl.type.map(with: &ctx)
+      let name = decl.name
+
+      if type == "float" || type == "double" {
+        let boxed = type == "float" ? "Float" : "Double"
+        return (name, "\(boxed).compare(\(name), other.\(name)) == 0")
+      }
+      if Self.javaPrimitiveNames.contains(type) {
+        return (name, "\(name) == other.\(name)")
+      }
+      return (name, "java.util.Objects.equals(\(name), other.\(name))")
+    }
+  }
+
+  /// Getters with the same names and return types the pointer-backed peer
+  /// emits, so consumers do not change. No setters: a serialized peer is a
+  /// snapshot, and a write to it could not reach the Swift value it came from.
+  func generateSerialized(with ctx: inout Context) -> String {
+    serializedDecls.map { decl in
+"""
+  public \(decl.type.map(with: &ctx)) get\(decl.capitalizedName)() {
+    return \(decl.name);
+  }
+"""
+    }.joined(separator: "\n\n")
   }
 
   /// Forwarding accessors for the nested `Borrowed` view. Statics are skipped:
