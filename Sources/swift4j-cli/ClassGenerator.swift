@@ -158,7 +158,10 @@ public \(nested ? "static" : "") class \(name) {
   }
 
   func generate(with ctx: inout Context) -> TypeProxy {
-    if typeDecl.isSerialized {
+    // Structs only, matching the macro, which rejects `serialized:` on a class
+    // outright. Honouring it here for a class would emit a value peer for a
+    // type whose expansion refuses to compile.
+    if typeDecl.isSerialized && typeDecl is StructDeclSyntax {
       return generateSerialized(with: &ctx)
     }
     // Only a type that hands out a scope needs the flag, and only such a type

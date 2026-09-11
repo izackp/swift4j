@@ -105,19 +105,32 @@ class VarGenerator {
     return resolvesToJvmStruct(Self.borrowedElement(of: element))
   }
 
+  /// Whether the type has a pointer-backed peer worth borrowing into.
+  ///
+  /// A serialized peer does not: it has no address, no `Borrowed` view, no
+  /// `wrapBorrowed` and no `_attachCache`, so emitting a scope or a cache entry
+  /// for one produces Java that names members the peer never declares. This is
+  /// the same shape as the `Date` case — the native stays declared (the macro
+  /// registers it from syntax alone and RegisterNatives fails the whole batch
+  /// on a missing method), while the public wrapper is suppressed.
   private func resolvesToJvmStruct(_ type: TypeSyntax) -> Bool {
     guard let registry else { return false }
 
+    func usable(_ decl: (any TypeDeclSyntax)?) -> Bool {
+      guard let decl, decl.is(StructDeclSyntax.self) else { return false }
+      return !decl.isSerialized
+    }
+
     if let ident = type.as(IdentifierTypeSyntax.self) {
-      return registry.topLevelType(named: ident.name.text)?.is(StructDeclSyntax.self) ?? false
+      return usable(registry.topLevelType(named: ident.name.text))
     }
     if let member = type.as(MemberTypeSyntax.self) {
       let leaf = member.name.text
       let base = member.baseType.as(IdentifierTypeSyntax.self)?.name.text
-      if let base, registry.hasNamespacedType(name: leaf, under: [base]) {
-        return true
+      if let base, let nested = registry.namespacedType(name: leaf, under: [base]) {
+        return !nested.isSerialized
       }
-      return registry.topLevelType(named: leaf)?.is(StructDeclSyntax.self) ?? false
+      return usable(registry.topLevelType(named: leaf))
     }
     return false
   }

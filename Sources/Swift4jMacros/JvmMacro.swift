@@ -33,6 +33,34 @@ public struct JvmMacro {
     return false
   }
 
+  /// `serialized:` means "copy the value across instead of handing out a
+  /// pointer", which only makes sense for a value type with fields.
+  ///
+  /// On a **class** it would silently destroy identity: two peers for the same
+  /// Swift object would compare equal, and a write through one would reach a
+  /// copy rather than the object. On an **enum** it is silently ignored —
+  /// EnumGenerator has its own peer shape, so the attribute would read as
+  /// applied while changing nothing.
+  ///
+  /// Both are quiet failures, so they are rejected at expansion instead.
+  static func assertSerializedIsApplicable(_ declaration: some DeclGroupSyntax) throws {
+    guard isSerialized(declaration) else { return }
+
+    if declaration.is(ClassDeclSyntax.self) {
+      throw JvmMacrosError.message(
+        "@jvm(serialized:) cannot be applied to a class. Serializing copies the "
+        + "value across the boundary, which would discard the reference identity "
+        + "a class has by definition: two peers for the same object would compare "
+        + "equal, and a write through one would not reach the other.")
+    }
+
+    if declaration.is(EnumDeclSyntax.self) {
+      throw JvmMacrosError.message(
+        "@jvm(serialized:) is not supported on an enum. Enums generate a "
+        + "different peer shape, so the attribute would be silently ignored.")
+    }
+  }
+
   static func assert(context: some MacroExpansionContext) throws {
     if let enclosingDeclType = context.enclosingDeclType {
       if !enclosingDeclType.isExported {
@@ -79,6 +107,7 @@ extension JvmMacro: MemberMacro {
                                in context: some MacroExpansionContext) throws -> [DeclSyntax] {
 
     try assert(context: context)
+    try assertSerializedIsApplicable(declaration)
 
     return try typeDecl(from: declaration).expandMembers(in: context)
   }

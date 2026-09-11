@@ -302,3 +302,26 @@ public class SerializedBridge {
     return row.id
   }
 }
+
+/// A pointer-backed type holding a *serialized* member.
+///
+/// The scoped-borrow rule is syntactic: both generators see `SerializedLeaf` as
+/// a bare type name and register/declare `unsafeWithLeafImpl` for it. But a
+/// serialized peer has no `Borrowed` view to hand out and no
+/// `fromUnownedPointer` to build one from, so the Java wrapper is suppressed
+/// and the Swift thunk has to fall through to the `JObjectConvertible`
+/// overload of `_jvmScopedBorrow` — the same path `Date` takes.
+///
+/// Compiling this is the check. Without that overload it is a type error here.
+@jvm
+public struct HoldsSerialized {
+  public var leaf: SerializedLeaf
+  public var optionalLeaf: SerializedLeaf?
+  public var leaves: [SerializedLeaf]
+
+  public init(leaf: SerializedLeaf, optionalLeaf: SerializedLeaf?, leaves: [SerializedLeaf]) {
+    self.leaf = leaf
+    self.optionalLeaf = optionalLeaf
+    self.leaves = leaves
+  }
+}

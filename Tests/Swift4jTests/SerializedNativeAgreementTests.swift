@@ -47,6 +47,20 @@ final class SerializedNativeAgreementTests: XCTestCase {
     public func touch() {}
     public static func describe() -> String { "row" }
   }
+
+  /// A pointer-backed type holding a serialized member. Both generators see
+  /// `Row` as a bare name and agree to register a borrow native for it; only
+  /// the CLI knows the peer has no `Borrowed` view, so it declares the native
+  /// and suppresses the public wrapper.
+  @jvm
+  public struct Holder {
+    public var row: Row
+    public var maybeRow: Row?
+    public init(row: Row, maybeRow: Row?) {
+      self.row = row
+      self.maybeRow = maybeRow
+    }
+  }
   """
 
   /// Native names the macro will hand to `RegisterNatives`.
@@ -117,6 +131,48 @@ final class SerializedNativeAgreementTests: XCTestCase {
     XCTAssertEqual(registered, declared,
                    "registered-but-not-declared: \(registered.subtracting(declared)); "
                    + "declared-but-not-registered: \(declared.subtracting(registered))")
+  }
+
+  /// The edge the borrow rule cannot see. `Holder.row` is a serialized type, so
+  /// its peer has no `Borrowed`, no `wrapBorrowed` and no `_attachCache` — but
+  /// both generators decide borrowability from the type *name*. The native has
+  /// to stay declared (or RegisterNatives unbinds the class) while the public
+  /// wrapper and the cache field are suppressed.
+  func testHandleHoldingASerializedMemberStillAgrees() throws {
+    let registered = try macroRegisteredNatives(forTypeNamed: "Holder")
+    let declared = try javaDeclaredNatives(forTypeNamed: "Holder")
+
+    XCTAssertTrue(registered.contains("unsafeWithRowImpl"),
+                  "the macro registers this from syntax alone")
+    XCTAssertEqual(registered, declared,
+                   "registered-but-not-declared: \(registered.subtracting(declared)); "
+                   + "declared-but-not-registered: \(declared.subtracting(registered))")
+  }
+
+  func testNoBorrowViewIsNamedForASerializedMember() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("swift4j-holder-\(ProcessInfo.processInfo.globallyUniqueString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let file = dir.appendingPathComponent("Fixture.swift")
+    try Self.fixture.write(to: file, atomically: true, encoding: .utf8)
+
+    let generator = ProxyGenerator(package: "test.pkg", javaVersion: 11)
+    var holder: String?
+    for result in try generator.run(paths: [file.path])
+    where result.source.contains("class Holder ") {
+      holder = result.source
+    }
+    let source = try XCTUnwrap(holder)
+
+    XCTAssertFalse(source.contains("Row.Borrowed"),
+                   "a serialized peer declares no Borrowed view")
+    XCTAssertFalse(source.contains("Row.wrapBorrowed"))
+    XCTAssertFalse(source.contains("_cacheRow"),
+                   "the cache calls _attachCache, which a serialized peer lacks")
+    XCTAssertTrue(source.contains("unsafeWithRowImpl"),
+                  "the native stays declared even with no caller")
   }
 
   /// Names the absences explicitly. The equality test above would catch these,

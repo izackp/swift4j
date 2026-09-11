@@ -43,6 +43,7 @@ final class TypeRegistry {
   func recordCandidateNamespace(for decl: any TypeDeclSyntax, path: [String]) {
     namespaceForType[decl.id] = path
     recordIdName(decl.id, decl.typeName)
+    idToDecl[decl.id] = decl
   }
 
   /// Strip namespace records whose root identifier IS itself a registered
@@ -89,9 +90,22 @@ final class TypeRegistry {
     }
   }
 
+  /// The namespaced declaration itself, where `hasNamespacedType` answers only
+  /// whether one exists. Callers that need a property of the declaration — say
+  /// whether it is serialized, which decides if it has a `Borrowed` view to
+  /// borrow into — need the decl, not a Bool.
+  func namespacedType(name typeName: String, under namespace: [String]) -> (any TypeDeclSyntax)? {
+    for (id, path) in namespaceForType
+    where path == namespace && nameForId(id) == typeName {
+      return idToDecl[id]
+    }
+    return nil
+  }
+
   /// Reverse lookup: declaration's unqualified name from its syntax id.
   /// Cached on first access; the working set is tiny.
   private var idToName: [SyntaxIdentifier: String] = [:]
+  private var idToDecl: [SyntaxIdentifier: any TypeDeclSyntax] = [:]
   func recordIdName(_ id: SyntaxIdentifier, _ name: String) {
     idToName[id] = name
   }
