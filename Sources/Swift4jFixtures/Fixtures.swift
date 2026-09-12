@@ -429,3 +429,44 @@ extension Opaque {
     return Opaque(raw: raw)
   }
 }
+
+
+/// Reproduces the macro/CLI split that no compiler can see.
+///
+/// The CLI reads every file, so it attaches `extension ExtensionStatic` and
+/// emits a Java `native orphanedStaticImpl`. The macro is attached to the
+/// struct and cannot see extensions, so it registers nothing for it. The
+/// RegisterNatives batch still succeeds — only entries that are *passed* get
+/// validated — so the class loads clean and `orphanedStatic` throws
+/// UnsatisfiedLinkError whenever it is first called, which may be never.
+@jvm
+public struct ExtensionStatic {
+  public var id: Int64
+
+  public init(id: Int64) {
+    self.id = id
+  }
+}
+
+public extension ExtensionStatic {
+  // Explicitly `public`: the CLI's export test reads the modifier on the
+  // declaration, not the effective access level the extension confers.
+  public static func orphanedStatic(_ value: Int64) -> Int64 {
+    return value * 2
+  }
+}
+
+
+/// Hands the registration check's findings to the JVM side so a test can
+/// assert on them. They are also printed to `System.err` for a human.
+@jvm
+public class NativeCheckBridge {
+  public static func findings() -> [String] {
+    return NativeRegistrationCheck.findings
+  }
+
+  /// Touching a class is what runs its `class_init`, and therefore its check.
+  public static func loadExtensionStatic() -> Int64 {
+    return ExtensionStatic(id: 7).id
+  }
+}

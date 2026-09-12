@@ -214,7 +214,14 @@ private enum __JClass__ {
   } ()
   static let ctor: JavaMethodID = {
     guard let mid = shared.getMethodID(name: "<init>", sig: "\(ctorSig)") else {
-      fatalError("Could not find \(fqn).<init>\(ctorSig)")
+      // The macro computes this descriptor from the Swift declaration; the CLI
+      // emits the constructor from its own member list. A nil here means they
+      // disagree, and the expected descriptor alone does not say how — so print
+      // what the peer actually declares next to it.
+      fatalError(\"\"\"
+        Could not find \(fqn).<init>\(ctorSig)
+        \\(NativeRegistrationCheck.describeConstructors(of: shared.ptr))
+        \"\"\")
     }
     return mid
   } ()
@@ -466,6 +473,19 @@ extension JvmTypeDeclSyntax {
     let chainForVar = (namespacePath + parents.map { $0.typeName } + [typeName])
       .joined(separator: "_")
 
+    // Display name for the diagnostic. Built the same way as the FindClass
+    // binary name below so the two never disagree about which class is meant.
+    let displayName: String = {
+      var pkgSegments: [String] = []
+      if let moduleName = moduleName(from: context) {
+        pkgSegments.append(moduleName)
+      }
+      pkgSegments.append(contentsOf: namespacePath)
+      let innerClassChain = (parents.map { $0.typeName } + [typeName]).joined(separator: "$")
+      let pkgPart = pkgSegments.joined(separator: "/")
+      return pkgPart.isEmpty ? innerClassChain : "\(pkgPart)/\(innerClassChain)"
+    } ()
+
     let cls_expr: String
     if parents.isEmpty && namespacePath.isEmpty {
       cls_expr = "cls"
@@ -498,7 +518,11 @@ extension JvmTypeDeclSyntax {
 """
   guard let \(chainForVar)_cls = \(cls_expr) else { return }
   let \(chainForVar)_natives = \(nativesLiteral)
-  let _ = jni.RegisterNatives(\(chainForVar)_cls, \(chainForVar)_natives)
+  let \(chainForVar)_result = jni.RegisterNatives(\(chainForVar)_cls, \(chainForVar)_natives)
+  NativeRegistrationCheck.check(class: \(chainForVar)_cls,
+                                named: "\(displayName)",
+                                registered: \(chainForVar)_natives,
+                                registerResult: \(chainForVar)_result)
 
   \(try exportedDecls.typeDecls
     .compactMap { $0 as? (any JvmTypeDeclSyntax) }

@@ -127,7 +127,7 @@ public struct JNI {
   public func SetDoubleField(_ obj: JavaObject, _ fieldID: JavaFieldID, _ value: JavaDouble) { env { $0.SetDoubleField($1, obj, fieldID, value) } }
 
 
-  public func GetStaticFieldID(_ cls: JavaClass, _ name: String, _ sig: String) -> JavaFieldID? { env { $0.GetFieldID($1, cls, name, sig) } }
+  public func GetStaticFieldID(_ cls: JavaClass, _ name: String, _ sig: String) -> JavaFieldID? { env { $0.GetStaticFieldID($1, cls, name, sig) } }
 
   public func GetStaticObjectField(_ cls: JavaClass, _ fieldID: JavaFieldID) -> JavaObject? { env { $0.GetStaticObjectField($1, cls, fieldID) } }
   public func GetStaticBooleanField(_ cls: JavaClass, _ fieldID: JavaFieldID) -> JavaBoolean { env { $0.GetStaticBooleanField($1, cls, fieldID) } }

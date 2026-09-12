@@ -146,14 +146,17 @@ switch self {
   }
 
   func expandJavaObjectDeclsAsEnum(in context: some MacroExpansionContext) throws -> String {
-    // Resolve the Java enum constant via the static `valueOf(String)` method,
-    // NOT GetStaticFieldID. On Android/ART, JNI GetStaticFieldID throws
-    // NoSuchFieldError for enum-constant static fields even though the field
-    // exists with the correct type (verified by reflection: getDeclaredFields
-    // lists the constant and getType() matches the enum) — an ART JNI quirk.
-    // Static method resolution (GetStaticMethodID + valueOf) works reliably and
-    // is symmetric with `fromJavaObject` (which maps by ordinal). `values()[i]`
-    // would also work; `valueOf(name)` is simplest and avoids array handling.
+    // Resolve the Java enum constant via the static `valueOf(String)` method.
+    //
+    // This used to be attributed to an ART quirk — GetStaticFieldID throwing
+    // NoSuchFieldError for an enum constant that reflection could plainly see.
+    // It was not a quirk: `JNI.GetStaticFieldID` dispatched to `GetFieldID`,
+    // which is *correct* to throw NoSuchFieldError when asked for a static
+    // field. That is fixed, so the field route would work now.
+    //
+    // `valueOf` stays because it is symmetric with `fromJavaObject` (which maps
+    // by ordinal) and needs no field ids. `values()[i]` would also work;
+    // `valueOf(name)` is simplest and avoids array handling.
     let enumSig = fqn(from: context)
     let toJavaCases = cases().map{
 """

@@ -98,12 +98,67 @@ final class NativeRegistrationTests: XCTestCase {
                    "a simple enum is bridged by ordinal and is not pointer-backed")
   }
 
+  /// The other direction, and the one `RegisterNatives` does **not** police: it
+  /// validates only the entries it is handed, so a native the peer declares and
+  /// nobody registers leaves the batch green. That method is unbound and throws
+  /// `UnsatisfiedLinkError` if it is ever called, which may be never — the
+  /// reason this kind survives review.
+  func testEveryDeclaredNativeIsRegistered() throws {
+    let (registered, declared) = try generate()
+
+    for (type, peer) in declared.sorted(by: { $0.key < $1.key }) {
+      let orphaned = peer
+        .subtracting(registered[type] ?? [])
+        .filter { !$0.hasSuffix("_class_init") }
+
+      XCTAssertTrue(orphaned.isEmpty,
+                    "'\(type)' declares native(s) nothing registers: "
+                    + "\(orphaned.sorted().joined(separator: ", ")).")
+    }
+  }
+
+  /// Pins the gap this static check cannot close.
+  ///
+  /// A peer macro is attached to a declaration and cannot see that type's
+  /// extensions; the CLI reads every file and can. So the CLI emits a native
+  /// for an extension-declared member that the macro will never register, and
+  /// no amount of comparing the two generators' *output* changes that — the
+  /// macro genuinely does not have the information.
+  ///
+  /// What catches it is `NativeRegistrationCheck` at class-init, which asks the
+  /// JVM what the peer actually declares. This test exists so that if the CLI
+  /// ever stops emitting the orphaned native — the real fix — the change is
+  /// deliberate rather than silent.
+  func testExtensionDeclaredStaticIsStillEmittedButNeverRegistered() throws {
+    let (registered, declared) = try generate(Self.extensionFixture)
+
+    XCTAssertTrue(declared["Extended"]?.contains("fromExtensionImpl") ?? false,
+                  "the CLI still emits a native for an extension-declared static")
+    XCTAssertFalse(registered["Extended"]?.contains("fromExtensionImpl") ?? true,
+                   "the macro cannot see the extension, so it registers nothing")
+  }
+
   // MARK: - harness
+
+  private static let extensionFixture = """
+  import Swift4j
+
+  @jvm
+  public struct Extended {
+    public var id: Int
+    public init(id: Int) { self.id = id }
+  }
+
+  public extension Extended {
+    public static func fromExtension(_ value: Int) -> Int { value }
+  }
+  """
+
 
   /// Returns (natives the macro registers, natives the peer declares), keyed by
   /// type name.
-  private func generate() throws -> ([String: Set<String>], [String: Set<String>]) {
-    let source = Parser.parse(source: Self.fixture)
+  private func generate(_ fixture: String = NativeRegistrationTests.fixture) throws -> ([String: Set<String>], [String: Set<String>]) {
+    let source = Parser.parse(source: fixture)
 
     let collector = TypeCollector(viewMode: .fixedUp)
     collector.walk(source)
@@ -120,7 +175,7 @@ final class NativeRegistrationTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let file = dir.appendingPathComponent("Fixture.swift")
-    try Self.fixture.write(to: file, atomically: true, encoding: .utf8)
+    try fixture.write(to: file, atomically: true, encoding: .utf8)
 
     var declared: [String: Set<String>] = [:]
     let generator = ProxyGenerator(package: "test.pkg", javaVersion: 11)
