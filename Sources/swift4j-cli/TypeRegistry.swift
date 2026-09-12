@@ -123,9 +123,19 @@ final class TypeRegistry {
   /// its parent context. A nested type only matches qualified extensions
   /// (e.g. `extension Outer.Inner`); a top-level type matches unqualified
   /// extensions of the same name.
+  ///
+  /// The namespace counts as qualification. `Server.Subject` is declared in
+  /// `extension Server`, which is a namespace rather than a parent type, so
+  /// `parents` is empty for it — without the namespace in the path it would
+  /// match a bare `extension Subject` belonging to an unrelated top-level
+  /// `Subject`, and silently absorb its members. That is not cosmetic: an
+  /// extra member changes the generated constructor, which then no longer
+  /// matches the descriptor the macro computes from the Swift declaration,
+  /// and `getMethodID` fails at class-init time with a green build.
   func extensions(of typeDecl: any TypeDeclSyntax, parents: [any TypeDeclSyntax]) -> [ExtensionDeclSyntax] {
-    let qualifiedPath = parents.map { $0.typeName } + [typeDecl.typeName]
-    let isNested = !parents.isEmpty
+    let namespace = namespacePath(for: typeDecl)
+    let qualifiedPath = namespace + parents.map { $0.typeName } + [typeDecl.typeName]
+    let isNested = !parents.isEmpty || !namespace.isEmpty
     return allExtensions.compactMap { entry in
       if entry.path == qualifiedPath {
         return entry.decl

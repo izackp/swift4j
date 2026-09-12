@@ -211,6 +211,7 @@ public struct UsesNamespaced {
   public init(inner: Nested.Inner) { self.inner = inner }
 }
 
+
 // MARK: - Serialized peers
 
 /// `@jvm(serialized: true)`: the Java peer carries copied fields instead of a
