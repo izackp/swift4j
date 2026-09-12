@@ -254,6 +254,27 @@ public struct SerializedPartial {
   }
 }
 
+/// Optional primitives. `Optional` conforms to `JParameterConvertible` only
+/// where `Wrapped: JObjectConvertible`, so these have no `toJavaParameter()`
+/// witness and must be boxed on the way out. This is the
+/// `Server.Subject.period` shape.
+@jvm(serialized: true)
+public struct SerializedOptionalPrimitives {
+  public var count: Int32?
+  public var size: Int64?
+  public var ratio: Double?
+  public var flag: Bool?
+  public var label: String?
+
+  public init(count: Int32?, size: Int64?, ratio: Double?, flag: Bool?, label: String?) {
+    self.count = count
+    self.size = size
+    self.ratio = ratio
+    self.flag = flag
+    self.label = label
+  }
+}
+
 @jvm(serialized: true)
 public struct SerializedRow {
   public var id: Int
@@ -289,6 +310,19 @@ public class SerializedBridge {
       stamp: Date(timeIntervalSince1970: 1_700_000_000),
       handleLeaf: Leaf(label: "leaf", count: 7),
       serializedLeaf: SerializedLeaf(label: "inner", weight: 2.5))
+  }
+
+  public static func makeOptionalPrimitives(present: Bool) -> SerializedOptionalPrimitives {
+    guard present else {
+      return SerializedOptionalPrimitives(
+        count: nil, size: nil, ratio: nil, flag: nil, label: nil)
+    }
+    return SerializedOptionalPrimitives(
+      count: -7, size: 9_000_000_000, ratio: 0.25, flag: true, label: "set")
+  }
+
+  public static func sumOptionalPrimitives(_ v: SerializedOptionalPrimitives) -> Int64 {
+    return Int64(v.count ?? 0) + (v.size ?? 0)
   }
 
   public static func makeRowWithNilName() -> SerializedRow {

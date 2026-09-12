@@ -1,6 +1,7 @@
 import Swift4jFixtures.SerializedBridge;
 import Swift4jFixtures.SerializedRow;
 import Swift4jFixtures.SerializedLeaf;
+import Swift4jFixtures.SerializedOptionalPrimitives;
 import Swift4jFixtures.Leaf;
 
 /**
@@ -90,6 +91,30 @@ public final class SerializedRoundTripTest {
         check("opaque facade crosses", opaque.getText(), "1234567890123");
         check("hand-written fromJavaObject recovers the storage",
               SerializedBridge.opaqueRaw(opaque), "1234567890123");
+
+        // Optional primitives are boxed on the way out: Optional has no
+        // toJavaParameter() witness when Wrapped is a primitive, and the
+        // constructor takes Integer/Long/Double/Boolean, not int/long/etc.
+        // Only running this proves the boxed descriptor matches.
+        SerializedOptionalPrimitives set = SerializedBridge.makeOptionalPrimitives(true);
+        check("boxed Int32? crosses", set.getCount(), Integer.valueOf(-7));
+        check("boxed Int64? crosses", set.getSize(), Long.valueOf(9_000_000_000L));
+        check("boxed Double? crosses", set.getRatio(), Double.valueOf(0.25));
+        check("boxed Bool? crosses", set.getFlag(), Boolean.TRUE);
+        check("optional String alongside", set.getLabel(), "set");
+
+        SerializedOptionalPrimitives none = SerializedBridge.makeOptionalPrimitives(false);
+        check("nil Int32? arrives null", none.getCount(), null);
+        check("nil Int64? arrives null", none.getSize(), null);
+        check("nil Double? arrives null", none.getRatio(), null);
+        check("nil Bool? arrives null", none.getFlag(), null);
+        check("nil String? arrives null", none.getLabel(), null);
+
+        // Java -> Swift, so the reconstruction unboxes what it was handed.
+        check("boxed optionals reconstruct",
+              SerializedBridge.sumOptionalPrimitives(set), 8_999_999_993L);
+        check("null optionals reconstruct as nil",
+              SerializedBridge.sumOptionalPrimitives(none), 0L);
 
         if (failures > 0) {
             System.out.println("\n" + failures + " serialized round-trip check(s) failed");

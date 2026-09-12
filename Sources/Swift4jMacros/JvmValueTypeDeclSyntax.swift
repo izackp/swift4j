@@ -68,8 +68,20 @@ public func toJavaObject() -> JavaObject? {
       // are marshalled outbound and skipped here, since there is nothing to
       // assign. The type of each `call` is inferred from the property being
       // assigned, so a nested peer recurses through its own `fromJavaObject`.
-      let assignments = (serializedStoredProperties.map {
-        "  self.\($0.name) = _jvmSource.call(method: __JClass__.get\($0.capitalizedName))"
+      // An optional is read as an object and unboxed through the wrapped
+      // type's own `fromJavaObject`. Going through `call` instead would infer
+      // `T` as the *wrapped* type for an optional primitive — `Optional<Int32>`
+      // is not `JConvertible`, only `Optional where Wrapped: JObjectConvertible`
+      // is — and Swift then promotes the result to the optional silently. That
+      // compiles, and calls `CallIntMethod` on a method whose descriptor
+      // returns `Integer`, reading an object reference as an int.
+      let assignments = (serializedStoredProperties.map { prop -> String in
+        let getter = "__JClass__.get\(prop.capitalizedName)"
+        guard let wrapped = prop.type.as(OptionalTypeSyntax.self)?.wrappedType else {
+          return "  self.\(prop.name) = _jvmSource.call(method: \(getter))"
+        }
+        return "  self.\(prop.name) = _jvmSource.callObjectMethod(method: \(getter), [])"
+          + ".map { \(wrapped.trimmedDescription).fromJavaObject($0) }"
       } + serializedNilRestoredProperties.map {
         "  self.\($0) = nil"
       }).joined(separator: "\n")
