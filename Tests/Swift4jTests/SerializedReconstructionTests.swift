@@ -48,6 +48,30 @@ final class SerializedReconstructionTests: XCTestCase {
   public struct ImmutableStorage {
     public let id: Int
   }
+
+  /// The `LocalImage.thumbnail` shape: unmarshalled, but `Optional`, so the
+  /// only value a reconstruction can invent for it is absence.
+  @jvm(serialized: true)
+  public struct HiddenOptionalStorage {
+    public var id: Int
+    @nonjvm public var blob: Data?
+  }
+
+  /// A default is not a substitute for `Optional`: this is the shape that
+  /// forges a zero UUID.
+  @jvm(serialized: true)
+  public struct HiddenDefaultedStorage {
+    public var id: Int
+    @nonjvm public var count: Int = 0
+  }
+
+  /// An unmarshalled `Optional` that carries a default is still defaulted
+  /// storage, not absent storage.
+  @jvm(serialized: true)
+  public struct HiddenDefaultedOptionalStorage {
+    public var id: Int
+    @nonjvm public var blob: Data? = Data()
+  }
   """
 
   private func structs() -> [String: StructDeclSyntax] {
@@ -83,6 +107,29 @@ final class SerializedReconstructionTests: XCTestCase {
     let decl = try XCTUnwrap(structs()["ImmutableStorage"])
     XCTAssertTrue(decl.isSerializedReconstructible,
                   "a let is assignable once, in an init")
+  }
+
+  func testHiddenOptionalStorageIsReconstructibleAsNil() throws {
+    let decl = try XCTUnwrap(structs()["HiddenOptionalStorage"])
+    XCTAssertTrue(decl.isSerializedReconstructible,
+                  "absence is the one value a reconstruction cannot get wrong")
+    XCTAssertEqual(decl.serializedNilRestoredProperties, ["blob"])
+    XCTAssertEqual(decl.serializedStoredProperties.map { $0.name }, ["id"],
+                   "the opted-out property still does not cross")
+  }
+
+  func testHiddenDefaultedStorageBlocksReconstruction() throws {
+    let decl = try XCTUnwrap(structs()["HiddenDefaultedStorage"])
+    XCTAssertFalse(decl.isSerializedReconstructible,
+                   "a default forges a value the Java side never carried")
+    XCTAssertEqual(decl.serializedNilRestoredProperties, [])
+  }
+
+  func testHiddenDefaultedOptionalStorageBlocksReconstruction() throws {
+    let decl = try XCTUnwrap(structs()["HiddenDefaultedOptionalStorage"])
+    XCTAssertFalse(decl.isSerializedReconstructible,
+                   "an Optional with a default is defaulted storage, not absent")
+    XCTAssertEqual(decl.serializedNilRestoredProperties, [])
   }
 
   /// Computed properties are marshalled outbound and skipped inbound: there is

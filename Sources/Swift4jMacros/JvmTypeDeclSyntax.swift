@@ -321,27 +321,54 @@ extension JvmTypeDeclSyntax {
       .filter { !$0.computed }
   }
 
+  /// Unmarshalled stored properties a reconstruction must assign itself.
+  ///
+  /// An unexported `Optional` with no default has no value to carry across and
+  /// no default to fall back on, so a reconstruction sets it to `nil`. That is
+  /// lossy by construction: the Java value never held it. Only sound where the
+  /// property is genuinely derived or unused on the JVM side.
+  var serializedNilRestoredProperties: [String] {
+    memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) }
+      .filter { !$0.isStatic && !$0.isExported }
+      .flatMap(\.bindings)
+      .filter { binding in
+        binding.accessorBlock == nil
+          && binding.initializer == nil
+          && binding.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
+      }
+      .compactMap { $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text }
+  }
+
   /// Whether a Java value of this type carries enough to rebuild the Swift one.
   ///
-  /// False when the type has a stored property that is not marshalled — a
-  /// `@nonjvm` one, typically. `LcUUID` is the case that matters: its only
-  /// storage is `@nonjvm uuid: uuid_t`, so a generated reconstruction would
-  /// quietly produce a zero UUID, which is a *valid-looking identifier for the
-  /// wrong row*. Better to emit nothing and let the conformance fail to
-  /// compile, which tells the author exactly where to write it by hand.
+  /// False when the type has a stored property that is neither marshalled nor
+  /// recoverable without one — a `@nonjvm` one, typically. `LcUUID` is the case
+  /// that matters: its only storage is `@nonjvm uuid: uuid_t`, so a generated
+  /// reconstruction would quietly produce a zero UUID, which is a
+  /// *valid-looking identifier for the wrong row*. Better to emit nothing and
+  /// let the conformance fail to compile, which tells the author exactly where
+  /// to write it by hand.
+  ///
+  /// An unmarshalled property is recoverable only when it is `Optional`, which
+  /// rebuilds as `nil`. A default value is explicitly *not* enough: a default
+  /// is precisely how a zero UUID would be forged.
   var isSerializedReconstructible: Bool {
     for member in memberBlock.members {
       guard let decl = member.decl.as(VariableDeclSyntax.self),
             !decl.isStatic else { continue }
       // A declaration with no type annotation is invisible to `decls`, so it
       // could not be assigned even if it were exported.
-      let storedNames = decl.bindings.compactMap { binding -> String? in
-        guard binding.accessorBlock == nil else { return nil }
-        return binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+      let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
+      guard !storedBindings.isEmpty else { continue }
+      if !decl.isExported {
+        let recoverable = storedBindings.allSatisfy {
+          $0.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
+            && $0.initializer == nil
+        }
+        if !recoverable { return false }
+        continue
       }
-      guard !storedNames.isEmpty else { continue }
-      if !decl.isExported { return false }
-      if decl.decls.count != storedNames.count { return false }
+      if decl.decls.count != storedBindings.count { return false }
     }
     return true
   }

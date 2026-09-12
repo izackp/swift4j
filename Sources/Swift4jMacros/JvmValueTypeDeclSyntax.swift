@@ -68,9 +68,11 @@ public func toJavaObject() -> JavaObject? {
       // are marshalled outbound and skipped here, since there is nothing to
       // assign. The type of each `call` is inferred from the property being
       // assigned, so a nested peer recurses through its own `fromJavaObject`.
-      let assignments = serializedStoredProperties.map {
+      let assignments = (serializedStoredProperties.map {
         "  self.\($0.name) = _jvmSource.call(method: __JClass__.get\($0.capitalizedName))"
-      }.joined(separator: "\n")
+      } + serializedNilRestoredProperties.map {
+        "  self.\($0) = nil"
+      }).joined(separator: "\n")
 
       return
 """
