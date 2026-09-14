@@ -1,3 +1,5 @@
+import Foundation
+
 import SwiftSyntax
 import SwiftParser
 
@@ -25,6 +27,34 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
   let settings: ProxyGenerator.Settings
 
   var nestedTypeGens: [any TypeGeneratorProtocol] = []
+
+  /// True while walking one of this type's extensions rather than its body.
+  ///
+  /// A member found here is invisible to the `@jvm` macro, which is attached to
+  /// the declaration and can only read what is inside its braces. Anything that
+  /// depends on the two generators agreeing — a native, a constructor
+  /// parameter — therefore cannot work for such a member, so the emitters skip
+  /// it. Nested `@jvm` types are unaffected: each carries its own macro.
+  private(set) var isWalkingExtension = false
+
+  /// Members dropped for that reason, reported once the walk finishes.
+  private(set) var skippedExtensionMembers: [String] = []
+
+  func noteSkippedExtensionMember(_ description: String) {
+    skippedExtensionMembers.append(description)
+
+    // Said out loud, because the alternative is silence: before this the member
+    // reached Java and failed only when something called it, which for the
+    // cases found in CaptureAPI was never.
+    let message = """
+      swift4j: \(typeDecl.typeName).\(description) is declared in an extension \
+      and is not bridged. The @jvm macro is attached to the declaration and \
+      cannot see extensions, so nothing would register it. Move it into the \
+      type's body to bridge it; ignore this if it is Swift-only.
+
+      """
+    FileHandle.standardError.write(Data(message.utf8))
+  }
 
   var name: String { typeDecl.typeName }
 
@@ -58,9 +88,11 @@ class TypeGenerator<T: TypeDeclSyntax>: SyntaxVisitor {
     // Also walk all extensions of this type to discover nested types
     // declared in extensions (cross-file or same-file).
     let parents = settings.registry.parents(of: typeDecl)
+    isWalkingExtension = true
     for ext in settings.registry.extensions(of: typeDecl, parents: parents) {
       walk(ext)
     }
+    isWalkingExtension = false
   }
 
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {

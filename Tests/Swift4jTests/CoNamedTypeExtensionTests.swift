@@ -20,6 +20,11 @@ import Foundation
 /// top-level to a parents-only check.
 final class CoNamedTypeExtensionTests: XCTestCase {
 
+  /// Extension *members* are no longer bridged at all — the macro cannot see
+  /// them, so the CLI does not emit them. What still flows through
+  /// `extensions(of:)` is nested `@jvm` type discovery, which carries its own
+  /// macro and works; that is what this fixture uses to observe which type an
+  /// extension was attached to.
   private static let fixture = """
   import Swift4j
 
@@ -32,7 +37,11 @@ final class CoNamedTypeExtensionTests: XCTestCase {
   }
 
   public extension Record {
-    public var localOnly: Int { id * 2 }
+    @jvm(serialized: true)
+    struct Local {
+      public var tag: Int
+      public init(tag: Int) { self.tag = tag }
+    }
   }
 
   public extension Wire {
@@ -44,7 +53,11 @@ final class CoNamedTypeExtensionTests: XCTestCase {
   }
 
   public extension Wire.Record {
-    public var wireOnly: String { "\\(id)" }
+    @jvm(serialized: true)
+    struct Remote {
+      public var tag: String
+      public init(tag: String) { self.tag = tag }
+    }
   }
   """
 
@@ -76,29 +89,31 @@ final class CoNamedTypeExtensionTests: XCTestCase {
   func testNamespacedTypeDoesNotAbsorbTheBareTypesExtension() throws {
     let (_, namespaced) = try generate()
 
-    XCTAssertFalse(namespaced.contains("localOnly"),
+    XCTAssertFalse(namespaced.contains("class Local"),
                    "Wire.Record must not pick up `extension Record`")
-    XCTAssertTrue(namespaced.contains("wireOnly"),
+    XCTAssertTrue(namespaced.contains("class Remote"),
                   "its own qualified extension still attaches")
   }
 
   func testBareTypeDoesNotAbsorbTheNamespacedTypesExtension() throws {
     let (topLevel, _) = try generate()
 
-    XCTAssertTrue(topLevel.contains("localOnly"))
-    XCTAssertFalse(topLevel.contains("wireOnly"),
+    XCTAssertTrue(topLevel.contains("class Local"))
+    XCTAssertFalse(topLevel.contains("class Remote"),
                    "`extension Wire.Record` belongs to the namespaced type")
   }
 
-  /// The constructor is where a leaked member does damage, because the macro
-  /// builds the descriptor from the Swift declaration and the CLI builds the
-  /// constructor from its own member list. They have to agree exactly.
+  /// Each type's constructor covers its own declared properties and nothing
+  /// else. The macro builds this descriptor from the Swift declaration and the
+  /// CLI builds the constructor from its own member list; a member attributed
+  /// to the wrong type makes them disagree, and the only symptom is
+  /// `getMethodID` returning nil at class-init.
   func testConstructorArityMatchesEachTypesOwnMembers() throws {
     let (topLevel, namespaced) = try generate()
 
-    XCTAssertTrue(topLevel.contains("public Record(long id, long localOnly)"),
-                  "the bare type carries its own extension member")
-    XCTAssertTrue(namespaced.contains("public Record(long id, String wireOnly)"),
-                  "the namespaced type carries only its own")
+    XCTAssertTrue(topLevel.contains("public Record(long id)"))
+    XCTAssertTrue(namespaced.contains("public Record(long id)"))
+    XCTAssertTrue(topLevel.contains("public Local(long tag)"))
+    XCTAssertTrue(namespaced.contains("public Remote(String tag)"))
   }
 }

@@ -117,23 +117,20 @@ final class NativeRegistrationTests: XCTestCase {
     }
   }
 
-  /// Pins the gap this static check cannot close.
+  /// The asymmetry that made this whole class of bug possible: the CLI reads
+  /// every file and sees extensions; a macro is attached to a declaration and
+  /// cannot. The macro therefore *cannot* register an extension-declared
+  /// member — it does not have the information — so the CLI must not emit one.
   ///
-  /// A peer macro is attached to a declaration and cannot see that type's
-  /// extensions; the CLI reads every file and can. So the CLI emits a native
-  /// for an extension-declared member that the macro will never register, and
-  /// no amount of comparing the two generators' *output* changes that — the
-  /// macro genuinely does not have the information.
-  ///
-  /// What catches it is `NativeRegistrationCheck` at class-init, which asks the
-  /// JVM what the peer actually declares. This test exists so that if the CLI
-  /// ever stops emitting the orphaned native — the real fix — the change is
-  /// deliberate rather than silent.
-  func testExtensionDeclaredStaticIsStillEmittedButNeverRegistered() throws {
+  /// Before this rule the Java was emitted anyway, advertising a method that
+  /// threw `UnsatisfiedLinkError` the first time anything called it. In
+  /// CaptureAPI that was eight methods across two classes, none of them called,
+  /// which is how it survived.
+  func testExtensionDeclaredStaticIsNotEmittedAtAll() throws {
     let (registered, declared) = try generate(Self.extensionFixture)
 
-    XCTAssertTrue(declared["Extended"]?.contains("fromExtensionImpl") ?? false,
-                  "the CLI still emits a native for an extension-declared static")
+    XCTAssertFalse(declared["Extended"]?.contains("fromExtensionImpl") ?? true,
+                   "the CLI must not emit a native the macro cannot register")
     XCTAssertFalse(registered["Extended"]?.contains("fromExtensionImpl") ?? true,
                    "the macro cannot see the extension, so it registers nothing")
   }

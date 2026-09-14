@@ -14,6 +14,15 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
 
   override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported && node.parentDecl?.isExported ?? true {
+      // An extension-declared property is invisible to the macro, so whichever
+      // way it would be bridged the two sides disagree: on a handle peer it
+      // needs a native getter that is never registered, and on a serialized
+      // peer it becomes a constructor parameter the macro's descriptor does not
+      // have — which makes getMethodID fail and class-init trap.
+      guard !isWalkingExtension else {
+        noteSkippedExtensionMember(node.bindings.first?.pattern.trimmedDescription ?? "?")
+        return .skipChildren
+      }
       varGens.append(VarGenerator(node,
                                   className: name,
                                   observationTracking: typeDecl.isObservable,
@@ -25,6 +34,13 @@ class ClassGenerator<T: TypeDeclSyntax>: TypeGenerator<T> {
   override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
     if node.isExported && node.parentDecl?.isExported ?? true
        && node.isBridgeable(typeConformsToHashable: typeDecl.conformsToHashable) {
+      // Same reason: a method needs a native, and the macro never sees this one
+      // to register it. Emitting the Java would advertise a method that throws
+      // UnsatisfiedLinkError the first time anyone calls it.
+      guard !isWalkingExtension else {
+        noteSkippedExtensionMember("\(node.name.text)()")
+        return .skipChildren
+      }
       methodGens.append(MethodGenerator(node, className: name))
     }
     return .skipChildren
