@@ -36,6 +36,19 @@ extension ExportableDeclSyntax {
     }
   }
 
+  /// Whether this declaration carries `@jvm(as:toJava:toSwift:)`, which marshals
+  /// a property whose own type cannot cross. Checked by name here so the
+  /// question is answerable from any `ExportableDeclSyntax`; the arguments are
+  /// read in `VariableDeclSyntax.jvmMarshalling`.
+  public var hasDeclaredMarshalling: Bool {
+    for element in attributes.findAttributes("jvm") {
+      guard case .attribute(let attr) = element,
+            case .argumentList(let args)? = attr.arguments else { continue }
+      if args.contains(where: { $0.label?.text == "as" }) { return true }
+    }
+    return false
+  }
+
   public var parentDecl: (any TypeDeclSyntax)? {
     guard let parent = parent?.parent?.parent?.parent?.asProtocol(DeclSyntaxProtocol.self) else { return nil }
     return parent as? any TypeDeclSyntax

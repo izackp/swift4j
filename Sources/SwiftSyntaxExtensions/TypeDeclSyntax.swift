@@ -79,17 +79,29 @@ public extension TypeDeclSyntax {
       // could not be assigned even if it were exported.
       let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
       guard !storedBindings.isEmpty else { continue }
-      guard decl.isExported else { return false }
+      guard decl.isExported || decl.hasDeclaredMarshalling else { return false }
       if decl.decls.count != storedBindings.count { return false }
     }
     return true
   }
 
-  /// A serialized peer can carry instance methods only when it can be rebuilt:
-  /// the thunk reconstructs the receiver from the peer's fields before
-  /// dispatching. Non-reconstructible types keep dropping them.
+  /// A serialized peer dispatches every instance member — methods and computed
+  /// properties alike — on a receiver rebuilt from the peer.
+  ///
+  /// Deliberately *not* gated on `isSerializedReconstructible`. That gate was a
+  /// second copy of the bug this file is built around: a type whose
+  /// reconstruction the macro cannot synthesize had its instance members
+  /// silently deleted from the Java surface, which is how an API loses methods
+  /// without anyone being told.
+  ///
+  /// The thunk emits `Type.fromJavaObject(recv)`, and `fromJavaObject` is a
+  /// `JObjectConvertible` requirement every `@jvm` type has to satisfy anyway.
+  /// So a synthesized reconstruction works, a hand-written one works — that is
+  /// the documented escape for storage the generator cannot marshal, such as
+  /// `LcUUID`'s `uuid_t`, which being a tuple can carry no conformance at all —
+  /// and a type with neither fails to compile, naming itself.
   var serializedDispatchesInstanceMethods: Bool {
-    isSerialized && isSerializedReconstructible
+    isSerialized
   }
 
   /// Whether a `mutating` method can be bridged: the thunk rebuilds the
@@ -97,19 +109,18 @@ public extension TypeDeclSyntax {
   /// property back through the peer's setter, which is what makes the write
   /// visible to Java.
   ///
-  /// Stricter than `serializedDispatchesInstanceMethods` on purpose. Reads
-  /// tolerate an unmarshalled `Optional` stored property, because rebuilding it
-  /// as `nil` costs a reader nothing. A write cannot: the mutation would land
-  /// on a property with no field to copy back to and vanish silently, which is
-  /// worse than refusing the method. A `let` is excluded for the same reason —
-  /// the peer declares no setter to write through.
+  /// Stricter than dispatch on purpose. A read only has to reach a receiver,
+  /// however that receiver is built. A write has to land somewhere: an
+  /// unmarshalled stored property has no field to copy back to, and a `let` has
+  /// no setter to write through, so the mutation would vanish silently — worse
+  /// than refusing the method.
   var serializedSupportsMutation: Bool {
-    guard serializedDispatchesInstanceMethods else { return false }
+    guard isSerialized else { return false }
     for member in memberBlock.members {
       guard let decl = member.decl.as(VariableDeclSyntax.self),
             !decl.isStatic else { continue }
       guard decl.bindings.contains(where: { $0.accessorBlock == nil }) else { continue }
-      if !decl.isExported { return false }
+      if !decl.isExported && !decl.hasDeclaredMarshalling { return false }
       if decl.bindingSpecifier.tokenKind == .keyword(.let) { return false }
     }
     return true

@@ -221,12 +221,18 @@ final class SerializedNativeAgreementTests: XCTestCase {
     let registered = try macroRegisteredNatives(forTypeNamed: "Row")
 
     for gone in ["deinit", "copyImpl", "init0",
-                 "getIdImpl", "getNameImpl", "getHandleImpl", "getFlagImpl",
+                 "getIdImpl", "getNameImpl", "getHandleImpl",
                  "unsafeWithHandleImpl",
                  "equalsImpl", "hashCodeImpl"] {
       XCTAssertFalse(registered.contains(gone),
                      "\(gone) has no meaning on a peer with no address")
     }
+
+    // `flag` is the exception, and not an address-shaped one: it is computed,
+    // so it was never storage and never became a field. It keeps its native
+    // for the same reason an instance method does.
+    XCTAssertTrue(registered.contains("getFlagImpl"),
+                  "a computed property dispatches rather than materialising")
   }
 
   /// An instance method is the one member that survives without a pointer: its
@@ -243,37 +249,44 @@ final class SerializedNativeAgreementTests: XCTestCase {
                   "and the Java side must declare the same native")
   }
 
-  /// The gate on the above. Without a reconstruction there is no receiver to
-  /// dispatch on, so the instance method goes and the static stays — and, more
-  /// importantly, both sides make that call identically.
-  func testInstanceMethodsStayDroppedOnANonReconstructiblePeer() throws {
+  /// A type the macro cannot synthesize a reconstruction for keeps its instance
+  /// methods. It used to lose them silently, which is how an API sheds methods
+  /// with nobody told — the failure that `@jvm(serialized:)` hit on
+  /// `FullSubject` and that this whole area exists to prevent.
+  ///
+  /// The thunk emits `fromJavaObject`, a conformance requirement the type has
+  /// to satisfy regardless. A hand-written one satisfies it, which is the
+  /// escape for storage that cannot marshal; nothing at all is a compile error
+  /// that names the type.
+  func testInstanceMethodsSurviveOnANonReconstructiblePeer() throws {
     let registered = try macroRegisteredNatives(forTypeNamed: "Sealed")
     let declared = try javaDeclaredNatives(forTypeNamed: "Sealed")
 
-    XCTAssertFalse(registered.contains("describeRawImpl"),
-                   "nothing can rebuild the receiver, so the method cannot be bridged")
+    XCTAssertTrue(registered.contains("describeRawImpl"),
+                  "dispatch does not care how the receiver gets rebuilt")
     XCTAssertTrue(registered.contains("kindImpl"), "a static is unaffected")
     XCTAssertEqual(registered, declared,
                    "registered-but-not-declared: \(registered.subtracting(declared)); "
                    + "declared-but-not-registered: \(declared.subtracting(registered))")
   }
 
-  /// Two separate gates, asserted separately.
+  /// Reads and writes are gated differently, and the two fixtures separate the
+  /// reasons.
   ///
-  /// An unmarshalled stored property blocks *every* instance method, read or
-  /// write: the thunk rebuilds the receiver from the peer's fields, and a field
-  /// that never crossed cannot be rebuilt from. It used to rebuild as `nil`
-  /// when it was `Optional`, which let reads through at the cost of handing
-  /// them a receiver that differed from the value marshalled out.
+  /// A read only needs a receiver, however it gets rebuilt — so `describe`
+  /// bridges even though `blob` is `@nonjvm`, and the type's own
+  /// `fromJavaObject` is then responsible for recovering it. A write has to
+  /// land somewhere: `wipe` would set a property with no field behind it, and
+  /// the mutation would vanish on the copy-back.
   ///
-  /// A `let` is narrower — the value crosses intact, so reads are fine; only
-  /// the write has no setter to go back through.
+  /// `Frozen` is the other half — everything marshals, so reads and the rebuild
+  /// are fine; only the `let` leaves no setter to write through.
   func testMutatingIsRefusedWhereTheWriteCannotBeCopiedBack() throws {
     let partial = try macroRegisteredNatives(forTypeNamed: "PartlyMarshalled")
-    XCTAssertFalse(partial.contains("describeImpl"),
-                   "the receiver cannot be rebuilt, so even a read is refused")
+    XCTAssertTrue(partial.contains("describeImpl"),
+                  "a read only needs a receiver")
     XCTAssertFalse(partial.contains("wipeImpl"),
-                   "and a write to it has no field to land in")
+                   "but a write to @nonjvm storage has no field to land in")
     XCTAssertEqual(partial, try javaDeclaredNatives(forTypeNamed: "PartlyMarshalled"))
 
     let frozen = try macroRegisteredNatives(forTypeNamed: "Frozen")

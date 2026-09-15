@@ -28,9 +28,10 @@ extension StructDeclSyntax: JvmValueTypeDeclSyntax {
     // the constructor takes `Integer`, not `int`, for a nullable field.
     if isSerialized {
       let args = serializedProperties.map { prop -> String in
-        prop.type.is(OptionalTypeSyntax.self)
-          ? "JavaParameter(object: \(prop.name).toJavaObject())"
-          : "\(prop.name).toJavaParameter()"
+        let value = prop.javaValue(of: "self")
+        return prop.type.is(OptionalTypeSyntax.self)
+          ? "JavaParameter(object: \(value).toJavaObject())"
+          : "\(value).toJavaParameter()"
       }
       return
 """

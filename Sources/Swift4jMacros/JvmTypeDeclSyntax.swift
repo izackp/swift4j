@@ -209,7 +209,7 @@ extension JvmTypeDeclSyntax {
       let setterIds = serializedSupportsMutation
         ? serializedProperties.compactMap { prop -> String? in
             guard let jniType = try? prop.type.jniSignature() else { return nil }
-            let setter = prop.computed ? "_set\(prop.capitalizedName)" : "set\(prop.capitalizedName)"
+            let setter = "set\(prop.capitalizedName)"
             return
 """
   static let \(setter): JavaMethodID = {
@@ -327,11 +327,19 @@ extension JvmTypeDeclSyntax {
   /// The instance properties a serialized peer materialises as Java fields,
   /// paired with the declaration they came from.
   ///
+  /// Storage only. A computed property is a function — Swift says so in the
+  /// declaration — and materialising one as a field changed the peer's shape
+  /// into something that no longer described the value's storage, inverted the
+  /// cost from pay-per-call to pay-per-instance, and introduced a value that
+  /// could disagree with the storage it was derived from. It is dispatched
+  /// instead, through the same pointer-less path as an instance method.
+  ///
   /// Must stay in step with `VarGenerator.serializedDecls` on the CLI side:
   /// the constructor's parameter order is agreed between them and nothing
   /// sorts.
   var serializedProperties: [VariableDeclSyntax.VarDecl] {
     exportedDecls.varDecls.filter { !$0.isStatic }.flatMap { $0.decls }
+      .filter { !$0.computed }
   }
 
   /// JNI descriptor for the all-fields constructor the CLI emits.
@@ -369,16 +377,16 @@ extension JvmTypeDeclSyntax {
   /// an object it would not have used.
   func serializedUpdateBody(peer: String, value: String) -> String {
     serializedProperties.map { prop -> String in
-      let setter = prop.computed ? "_set\(prop.capitalizedName)" : "set\(prop.capitalizedName)"
+      let setter = "set\(prop.capitalizedName)"
+      let crossed = prop.javaValue(of: value)
       let param = prop.type.is(OptionalTypeSyntax.self)
-        ? "JavaParameter(object: \(value).\(prop.name).toJavaObject())"
-        : "\(value).\(prop.name).toJavaParameter()"
+        ? "JavaParameter(object: \(crossed).toJavaObject())"
+        : "\(crossed).toJavaParameter()"
       let assign = "\(peer).call(method: __JClass__.\(setter), [\(param)])"
 
-      // A derived field is recomputed wholesale: there is no identity to
-      // preserve in a value that is defined as a function of the others, and
-      // no getter id is emitted for one.
-      guard !prop.computed else { return "  \(assign)" }
+      // A converted value is a fresh Java object every time, so there is no
+      // identity to preserve and nothing to update in place — assign it.
+      guard prop.marshalling == nil else { return "  \(assign)" }
 
       let bind = prop.type.is(OptionalTypeSyntax.self)
         ? "let __v_\(prop.name) = \(value).\(prop.name), let __u_\(prop.name) = __v_\(prop.name) as? JObjectUpdatable"
@@ -415,7 +423,13 @@ extension JvmTypeDeclSyntax {
     // declare, so this list and ClassGenerator's serialized template have to
     // agree exactly. Both key off the same `isSerialized`.
     if isSerialized {
-      let staticVarNatives: [String] = exportedDecls.varDecls.filter { $0.isStatic }.flatMap { decl in
+      // Statics, plus computed instance properties — which are functions, not
+      // storage, and so stay methods on the peer rather than becoming fields.
+      // Their thunks take no address; the receiver is rebuilt from the fields.
+      let varNativeDecls = exportedDecls.varDecls.filter {
+        $0.isStatic || (serializedDispatchesInstanceMethods && !$0.hasStoredBinding)
+      }
+      let staticVarNatives: [String] = varNativeDecls.flatMap { decl in
         guard let bridgings = try? decl.bridgings(typeDecl: self) else { return [String]() }
         return bridgings.map {
           expandCreateNativeMethod(name: $0.javaName, sig: $0.sig, fn: "\(fqn).\($0.bridgeName)")

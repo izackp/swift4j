@@ -365,29 +365,30 @@ class VarGenerator {
 
   // MARK: - Serialized peers
 
-  /// The instance properties a serialized peer materialises as Java fields.
+  /// The instance properties a serialized peer materialises as Java fields:
+  /// storage, and only storage.
   ///
-  /// Computed properties are included. A serialized peer holds no pointer, so
-  /// nothing can be evaluated later — a computed property is either evaluated
-  /// once at marshal time or not exposed at all. `@nonjvm` remains the opt-out
-  /// for one that should not be paid for.
+  /// A computed property is a function, and the declaration is where the author
+  /// says so. It keeps being a method on the peer — see
+  /// `serializedComputedAccessors` — dispatched through a native that takes no
+  /// address, exactly as an instance method is.
   var serializedDecls: [VariableDeclSyntax.VarDecl] {
-    varDecl.isStatic ? [] : varDecl.decls
+    varDecl.isStatic ? [] : varDecl.decls.filter { !$0.computed }
+  }
+
+  /// The computed instance properties, which dispatch rather than materialise.
+  var serializedComputedDecls: [VariableDeclSyntax.VarDecl] {
+    varDecl.isStatic ? [] : varDecl.decls.filter { $0.computed }
   }
 
   /// Mutable unless the Swift declaration is read-only, because a serialized
   /// peer is a *detached copy* and writing to one is how the edit-buffer
-  /// pattern works: copy, mutate, hand back. A `let` or a get-only computed
-  /// property has nothing to write to, so it stays final.
-  /// `mutable` drops `final` from the derived fields. A peer that can be
-  /// mutated has to be able to refresh them: a computed property is evaluated
-  /// once at marshal time, so leaving it final would let the peer keep
-  /// reporting a value derived from storage that a `mutating` method has since
-  /// replaced — `flag == true` on a row whose `id` is now negative. They stay
-  /// unsettable from Java either way; only `_writeback` assigns them.
-  func serializedFieldDecls(with ctx: inout Context, mutable: Bool = false) -> String {
+  /// pattern works: copy, mutate, hand back. A `let` has nothing to write to,
+  /// so it stays final — which is now the only reason a field is final, since
+  /// the fields are storage and nothing else.
+  func serializedFieldDecls(with ctx: inout Context) -> String {
     serializedDecls.map {
-      let modifier = ($0.readonly && !mutable) ? "private final" : "private"
+      let modifier = $0.readonly ? "private final" : "private"
       return "  \(modifier) \($0.type.map(with: &ctx)) \($0.name);"
     }.joined(separator: "\n")
   }
@@ -464,16 +465,34 @@ class VarGenerator {
     }.joined(separator: "\n\n")
   }
 
-  /// Package-private setters for the derived (get-only) fields of a peer that
-  /// can be mutated. Only the mutation thunk calls these — a derived value is
-  /// not settable API — and without them the field could not be refreshed after
-  /// a `mutating` method changed the storage it is computed from.
-  func serializedDerivedSetters(with ctx: inout Context) -> String {
-    serializedDecls.filter { $0.readonly }.map { decl in
+  /// Accessors for the computed properties, with the same names and types the
+  /// pointer-backed peer emits. The native takes no `long ptr`: JNI hands the
+  /// peer over as the receiver and the thunk rebuilds the Swift value from the
+  /// marshalled fields before reading through.
+  ///
+  /// Emitted only where the type is reconstructible, since there is no receiver
+  /// to rebuild otherwise. The macro reads the same predicate, so the
+  /// registered native set stays in agreement — `RegisterNatives` fails the
+  /// whole batch on a native the peer does not declare.
+  func serializedComputedAccessors(with ctx: inout Context, dispatches: Bool) -> String {
+    guard dispatches else { return "" }
+    return serializedComputedDecls.map { decl in
+      let type = decl.type.map(with: &ctx)
+      let getter =
 """
-  void _set\(decl.capitalizedName)(\(decl.type.map(with: &ctx)) value) {
-    this.\(decl.name) = value;
+  public \(type) get\(decl.capitalizedName)() {
+    return get\(decl.capitalizedName)Impl();
   }
+  private native \(type) get\(decl.capitalizedName)Impl();
+"""
+      guard !decl.readonly else { return getter }
+      return getter + "\n\n" +
+"""
+  @io.scade.swift4j.SwiftMutating
+  public void set\(decl.capitalizedName)(\(type) value) {
+    set\(decl.capitalizedName)Impl(value);
+  }
+  private native void set\(decl.capitalizedName)Impl(\(type) value);
 """
     }.joined(separator: "\n\n")
   }

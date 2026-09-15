@@ -7,6 +7,29 @@ import SwiftSyntaxExtensions
 
 
 extension VariableDeclSyntax {
+  /// An accessor on a serialized peer takes no address: there is none. JNI
+  /// hands the peer over as the receiver and the thunk rebuilds the Swift value
+  /// from the marshalled fields, exactly as an instance method does.
+  private func serializedReceiver(_ typeDecl: any JvmTypeDeclSyntax) -> Bool {
+    typeDecl.serializedDispatchesInstanceMethods && !isStatic
+  }
+
+  private func paramTypes(_ typeDecl: any JvmTypeDeclSyntax) -> [String] {
+    ["UnsafeMutablePointer<JNIEnv>"]
+      + (isStatic ? ["JavaClass?"]
+         : serializedReceiver(typeDecl) ? ["JavaObject?"]
+         : ["JavaObject?", "JavaLong"])
+  }
+
+  private func closureParams(_ typeDecl: any JvmTypeDeclSyntax) -> [String] {
+    ["_", serializedReceiver(typeDecl) ? "recv" : "_"]
+      + (isStatic || serializedReceiver(typeDecl) ? [] : ["ptr"])
+  }
+
+  /// The pointer-backed shape. Used by the borrow, array-size and observation
+  /// thunks, none of which a serialized peer ever gets: a borrow needs an
+  /// address to lend, and `scopedBorrowable` excludes computed properties
+  /// besides.
   private var defaultParamTypes: [String] {
     ["UnsafeMutablePointer<JNIEnv>"] + (isStatic ? ["JavaClass?"] : ["JavaObject?", "JavaLong"])
   }
@@ -65,7 +88,7 @@ extension VariableDeclSyntax {
   }
 
   func bridgings(typeDecl: any JvmTypeDeclSyntax) throws -> [(javaName: String, bridgeName: String, sig: String)] {
-    let _self = isStatic ? "" : "J"
+    let _self = (isStatic || serializedReceiver(typeDecl)) ? "" : "J"
 
     return try decls.flatMap {
       let jniType = try $0.type.jniSignature()
@@ -145,18 +168,41 @@ extension VariableDeclSyntax {
   //MARK: - Setter
 
   private func makeBridgingSetter(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) throws -> String {
-    let _self = isStatic ? "\(typeDecl.typeName).self" : typeDecl.selfExpr
+    // A computed setter on a serialized peer writes through to storage, so it
+    // needs the copy-back a `mutating` method gets: the receiver is a temporary
+    // rebuilt from the peer, and without the write-back the assignment lands on
+    // it and the Java object is silently unchanged.
+    let writesBack = serializedReceiver(typeDecl)
+    if writesBack && !typeDecl.serializedSupportsMutation {
+      throw JvmMacrosError.message(
+        "computed `var \(varDecl.name)` cannot have its setter bridged on "
+        + "`@jvm(serialized:)` type `\(typeDecl.typeName)`: the receiver is rebuilt from "
+        + "the Java peer's fields, and the write cannot be copied back because at least "
+        + "one stored property is `@nonjvm` (nothing to write to) or `let` (no setter). "
+        + "Make it get-only, or mark it `@nonjvm`.")
+    }
+
+    let _self = isStatic ? "\(typeDecl.typeName).self"
+      : writesBack ? "__self"
+      : typeDecl.selfExpr
 
     let bridgeName = "\(varDecl.name)_set_jni"
-    let paramTypes = defaultParamTypes + [try varDecl.type.jniType()]
+    let paramTypes = paramTypes(typeDecl) + [try varDecl.type.jniType()]
     let returnType = "Void"
     let varParamName = "value"
-    let closureParams = defaultClosureParams + [varParamName]
-    
+    let closureParams = closureParams(typeDecl) + [varParamName]
+
     let mapping = try varDecl.type.fromJava(varParamName)
+    let prologue = writesBack
+      ? """
+        var __self = \(typeDecl.typeName).fromJavaObject(recv)
+  defer { __self.updateJavaObject(recv!) }
+
+  """
+      : ""
     let body =
 """
-\(mapping.stmts.joined(separator: "\n  "))
+\(prologue)\(mapping.stmts.joined(separator: "\n  "))
 \(_self).\(varDecl.name) = \(mapping.mapped)
 """
 
@@ -172,12 +218,14 @@ extension VariableDeclSyntax {
   //MARK: - Getter
 
   private func makeBridgingGetter(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) throws -> String {
-    let _self = isStatic ? "\(typeDecl.typeName).self" : typeDecl.selfExpr
+    let _self = isStatic ? "\(typeDecl.typeName).self"
+      : serializedReceiver(typeDecl) ? "\(typeDecl.typeName).fromJavaObject(recv)"
+      : typeDecl.selfExpr
 
     let bridgeName = "\(varDecl.name)_get_jni"
-    let paramTypes = defaultParamTypes
+    let paramTypes = paramTypes(typeDecl)
     let returnType = try varDecl.type.jniType()
-    let closureParams = defaultClosureParams
+    let closureParams = closureParams(typeDecl)
     
     let mapping = try varDecl.type.toJava("\(_self).\(varDecl.name)")
     let body =

@@ -130,10 +130,12 @@ extension JvmMacro: MemberAttributeMacro {
                                in context: some SwiftSyntaxMacros.MacroExpansionContext) throws -> [SwiftSyntax.AttributeSyntax] {
 
     if let decl = member.as(VariableDeclSyntax.self), decl.isExported {
-      // On a serialized type an instance property is a Java field, so the
-      // accessor thunks `@jvm_exported` generates would be registered against
-      // methods the peer does not declare. Statics keep theirs.
-      if isSerialized(declaration) && !decl.isStatic {
+      // On a serialized type a *stored* instance property is a Java field, so
+      // the accessor thunks `@jvm_exported` generates would be registered
+      // against methods the peer does not declare. A computed one is a
+      // function, keeps being a method on the peer, and needs its thunks.
+      // Statics keep theirs either way.
+      if isSerialized(declaration) && !decl.isStatic && decl.hasStoredBinding {
         return []
       }
       return [AttributeSyntax(stringLiteral: "@jvm_exported")]

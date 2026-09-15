@@ -56,12 +56,48 @@ public macro jvmBinding() =
 public macro nonjvm() =
   #externalMacro(module: "Swift4jMacros", type: "NonjvmMacro")
 
+/// Marshal a stored property whose own type cannot cross, by naming the type
+/// that can and the two conversions between them.
+///
+/// `@nonjvm` is not an alternative on a `@jvm(serialized:)` type. A serialized
+/// value's representation *is* its marshalled stored properties, so opting one
+/// out does not hide a detail — it removes part of the value from the wire, and
+/// whatever is left cannot rebuild it.
+///
+/// `uuid_t` is the case that forced this. It is a tuple, and a tuple is
+/// non-nominal, so it can conform to nothing — not `Codable`, not
+/// `LosslessStringConvertible`, not anything a generator could key off. The
+/// conversion has to be supplied:
+///
+///     @jvm(as: String.self,
+///          toJava: { (u: uuid_t) in UUID(uuid: u).uuidString.lowercased() },
+///          toSwift: { (s: String) in UUID(uuidString: s)!.uuid })
+///     public private(set) var uuid: uuid_t
+///
+/// Both are ordinary closures, so the compiler checks them — a conversion with
+/// the wrong shape is a build error rather than a value that crosses wrong.
+///
+/// Read from the declaration by both the macro and the CLI. That is the point
+/// of putting it here rather than inferring it from a conformance: the macro
+/// sees one file, and a conformance can be declared in any of them.
+@attached(peer)
+public macro jvm<Value, Raw>(as: Raw.Type,
+                             toJava: (Value) -> Raw,
+                             toSwift: (Raw) -> Value) =
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+
 #else
 
 // Non-Android: stub macros. JVM bridging members aren't generated; iOS/macOS
 // consumers see the annotated types as plain Swift declarations.
 @attached(peer)
 public macro jvm(serialized: Bool = false) =
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+
+@attached(peer)
+public macro jvm<Value, Raw>(as: Raw.Type,
+                             toJava: (Value) -> Raw,
+                             toSwift: (Raw) -> Value) =
   #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
 
 @attached(peer)

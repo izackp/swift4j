@@ -178,13 +178,15 @@ final class SerializedReconstructionTests: XCTestCase {
                    "an ordinary method in the same extension is still bridged")
   }
 
-  /// Outbound carries the computed property; inbound does not. The asymmetry is
-  /// deliberate and worth pinning, since the constructor descriptor is built
-  /// from the outbound list and a reconstruction from the inbound one.
-  func testOutboundCarriesMoreThanInbound() throws {
+  /// Outbound and inbound now agree, because both are storage. A computed
+  /// property used to appear outbound only — carried as a field on the way out,
+  /// ignored on the way back — which made the peer's field set describe
+  /// something other than the value's storage, and made the constructor accept
+  /// an argument the reconstruction discarded.
+  func testOutboundAndInboundAreBothStorage() throws {
     let decl = try XCTUnwrap(structs()["FullyMarshalled"])
 
-    XCTAssertEqual(decl.serializedProperties.map { $0.name }, ["id", "name", "derived"])
+    XCTAssertEqual(decl.serializedProperties.map { $0.name }, ["id", "name"])
     XCTAssertEqual(decl.serializedStoredProperties.map { $0.name }, ["id", "name"])
   }
 }

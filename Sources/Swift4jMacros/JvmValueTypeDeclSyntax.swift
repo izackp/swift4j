@@ -77,6 +77,14 @@ public func toJavaObject() -> JavaObject? {
       // returns `Integer`, reading an object reference as an int.
       let assignments = (serializedStoredProperties.map { prop -> String in
         let getter = "__JClass__.get\(prop.capitalizedName)"
+        // A property whose type cannot cross is read as its declared Java type
+        // and converted back — the `as:` half of `@jvm(as:toJava:toSwift:)`.
+        // The annotation is needed because `call`'s `T` is inferred from the
+        // assignment target, which here is the Swift type, not the crossed one.
+        if let marshalling = prop.marshalling {
+          let raw = "(_jvmSource.call(method: \(getter)) as \(marshalling.javaType.trimmedDescription))"
+          return "  self.\(prop.name) = \(prop.swiftValue(from: raw))"
+        }
         guard let wrapped = prop.type.as(OptionalTypeSyntax.self)?.wrappedType else {
           return "  self.\(prop.name) = _jvmSource.call(method: \(getter))"
         }

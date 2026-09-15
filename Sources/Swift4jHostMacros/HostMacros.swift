@@ -42,3 +42,11 @@ public macro jvmBinding() =
 @attached(peer)
 public macro nonjvm() =
   #externalMacro(module: "Swift4jMacros", type: "NonjvmMacro")
+
+/// See `Swift4j.jvm(as:toJava:toSwift:)`. Marshals a stored property whose own
+/// type cannot cross, by naming the type that can and both conversions.
+@attached(peer)
+public macro jvm<Value, Raw>(as: Raw.Type,
+                             toJava: (Value) -> Raw,
+                             toSwift: (Raw) -> Value) =
+  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")

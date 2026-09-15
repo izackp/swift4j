@@ -78,27 +78,30 @@ final class SerializedPeerTests: XCTestCase {
                    "a field read must not go through a native")
   }
 
-  func testComputedPropertyBecomesAField() throws {
+  /// A computed property is a function, and Swift says so in the declaration.
+  /// Materialising one as a field made the peer's field set describe something
+  /// other than the value's storage, turned pay-per-call into pay-per-instance,
+  /// and left a value that its own storage could outrun. It dispatches instead,
+  /// through a native that takes no address — the same path an instance method
+  /// uses.
+  func testComputedPropertyDispatchesRatherThanMaterialising() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
-    // Nothing can be lazy without a pointer, so a computed property is
-    // evaluated once at marshal time or not exposed at all.
-    XCTAssertTrue(snapshot.contains("private boolean flag;"))
-    XCTAssertTrue(snapshot.contains("public boolean getFlag()"))
+    XCTAssertFalse(snapshot.contains("boolean flag;"),
+                   "a computed property is not storage and gets no field")
+    XCTAssertTrue(snapshot.contains("public boolean getFlag()"),
+                  "but the Java surface is unchanged")
+    XCTAssertTrue(snapshot.contains("private native boolean getFlagImpl();"),
+                  "and the native takes no pointer, since there is no address")
   }
 
-  /// Not `final`, because this peer can be mutated: a `mutating` method changes
-  /// the storage `flag` is derived from, and the copy-back has to refresh it or
-  /// the peer reports a value its own fields no longer imply. The setter is
-  /// package-private — refreshing a derived value is not settable API.
-  func testDerivedFieldIsRefreshableOnAMutablePeer() throws {
+  /// The refresh machinery is gone with the fields it existed for: nothing is
+  /// derived any more, so nothing can go stale and there is no `_setX`.
+  func testNoDerivedFieldMachinerySurvives() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
-    XCTAssertFalse(snapshot.contains("private final boolean flag;"),
-                   "a refreshable derived field cannot be final")
-    XCTAssertTrue(snapshot.contains("void _setFlag(boolean value)"))
-    XCTAssertFalse(snapshot.contains("public void _setFlag"),
-                   "and it is not public API")
+    XCTAssertFalse(snapshot.contains("_setFlag"),
+                   "a value that is recomputed on every read cannot go stale")
   }
 
   func testAllFieldsConstructorIsPublicAndInDeclarationOrder() throws {
@@ -107,7 +110,9 @@ final class SerializedPeerTests: XCTestCase {
     // The macro's toJavaObject builds its argument list from the same order,
     // so neither side may sort.
     XCTAssertTrue(snapshot.contains(
-      "public Snapshot(Inner inner, long count, @Nullable String name, Date stamp, boolean flag)"))
+      "public Snapshot(Inner inner, long count, @Nullable String name, Date stamp)"),
+      "storage only — the computed `flag` is not a constructor argument, because "
+      + "a reconstruction would have discarded whatever was passed for it")
   }
 
   /// `Objects.equals` on a primitive boxes both sides, and this runs per field
@@ -116,9 +121,11 @@ final class SerializedPeerTests: XCTestCase {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
     XCTAssertTrue(snapshot.contains("count == other.count"))
-    XCTAssertTrue(snapshot.contains("flag == other.flag"))
     XCTAssertTrue(snapshot.contains("java.util.Objects.equals(inner, other.inner)"),
                   "reference fields still need null-safe equality")
+    XCTAssertFalse(snapshot.contains("flag == other.flag"),
+                   "equality compares storage; comparing a value derived from "
+                   + "that storage decides nothing and costs a field")
   }
 
   func testNothingThatOwnsOrBorrowsAnAddressSurvives() throws {
