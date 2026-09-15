@@ -90,52 +90,62 @@ extension VariableDeclSyntax {
   func bridgings(typeDecl: any JvmTypeDeclSyntax) throws -> [(javaName: String, bridgeName: String, sig: String)] {
     let _self = (isStatic || serializedReceiver(typeDecl)) ? "" : "J"
 
-    return try decls.flatMap {
-      let jniType = try $0.type.jniSignature()
+    return try decls.flatMap { d -> [(javaName: String, bridgeName: String, sig: String)] in
+      let jniType = try d.type.jniSignature()
+
+      // A marshalled stored property reads as a plain field and writes through
+      // a native, so it declares the setter alone.
+      if d.marshalling != nil, serializedReceiver(typeDecl), !d.computed {
+        guard !d.readonly else { return [] }
+        return [(javaName: "set\(d.capitalizedName)Impl",
+                 bridgeName: "\(d.name)_set_jni",
+                 sig: "(\(_self)\(jniType))V")]
+      }
+
       var decls = [(
-        javaName: "get\($0.capitalizedName)Impl",
-        bridgeName: "\($0.name)_get_jni",
+        javaName: "get\(d.capitalizedName)Impl",
+        bridgeName: "\(d.name)_get_jni",
         sig: "(\(_self))\(jniType)"
       )]
 
-      if Self.scopedBorrowable($0, isStatic: isStatic) {
+      if Self.scopedBorrowable(d, isStatic: isStatic) {
         decls.append((
-          javaName: "unsafeWith\($0.capitalizedName)Impl",
-          bridgeName: "\($0.name)_with_jni",
+          javaName: "unsafeWith\(d.capitalizedName)Impl",
+          bridgeName: "\(d.name)_with_jni",
           sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
         ))
       }
 
-      if Self.scopedForEachable($0, isStatic: isStatic) {
+      if Self.scopedForEachable(d, isStatic: isStatic) {
         decls.append((
-          javaName: "unsafeForEach\($0.capitalizedName)Impl",
-          bridgeName: "\($0.name)_each_jni",
+          javaName: "unsafeForEach\(d.capitalizedName)Impl",
+          bridgeName: "\(d.name)_each_jni",
           sig: "(JLio/scade/swift4j/SwiftBorrow;)V"
         ))
         decls.append((
-          javaName: "unsafeElementOf\($0.capitalizedName)Impl",
-          bridgeName: "\($0.name)_element_jni",
+          javaName: "unsafeElementOf\(d.capitalizedName)Impl",
+          bridgeName: "\(d.name)_element_jni",
           sig: "(JILio/scade/swift4j/SwiftBorrow;)V"
         ))
         decls.append((
-          javaName: "sizeOf\($0.capitalizedName)Impl",
-          bridgeName: "\($0.name)_size_jni",
+          javaName: "sizeOf\(d.capitalizedName)Impl",
+          bridgeName: "\(d.name)_size_jni",
           sig: "(J)I"
         ))
       }
 
-      if !$0.readonly {
+      if !d.readonly {
         decls.append((
-          javaName: "set\($0.capitalizedName)Impl",
-          bridgeName: "\($0.name)_set_jni",
+          javaName: "set\(d.capitalizedName)Impl",
+          bridgeName: "\(d.name)_set_jni",
           sig: "(\(_self)\(jniType))V"
         ))
       }
 
-      if $0.observable(self) && typeDecl.isObservable {
+      if d.observable(self) && typeDecl.isObservable {
         decls.append((
-            javaName: "get\($0.capitalizedName)WithObservationTrackingImpl",
-            bridgeName: "\($0.name)_get_with_observation_tracking_jni",
+            javaName: "get\(d.capitalizedName)WithObservationTrackingImpl",
+            bridgeName: "\(d.name)_get_with_observation_tracking_jni",
             sig: "(\(_self)Ljava/lang/Runnable;)\(jniType)"
           ))
       }
@@ -146,6 +156,10 @@ extension VariableDeclSyntax {
 
   func makeBridgingDecls(typeDecl: any JvmTypeDeclSyntax) throws -> String {
     try decls.flatMap { decl -> [String] in
+      if decl.marshalling != nil, serializedReceiver(typeDecl), !decl.computed {
+        guard !decl.readonly else { return [] }
+        return [try makeBridgingSetter(for: decl, in: typeDecl)]
+      }
       var parts: [String] = [try makeBridgingGetter(for: decl, in: typeDecl)]
       if !decl.readonly {
         parts.append(try makeBridgingSetter(for: decl, in: typeDecl))
@@ -167,7 +181,48 @@ extension VariableDeclSyntax {
 
   //MARK: - Setter
 
+  /// The setter for a property that crosses as some other type.
+  ///
+  /// Converts the incoming value and writes that one field through the peer's
+  /// unchecked `_setX`. It does not rebuild the receiver and does not copy
+  /// anything else back, so no other member is read, written or replaced — a
+  /// Kotlin reference to any of them is untouched by this call.
+  ///
+  /// `toSwift` throws, and the conversion is the only thing that can fail, so a
+  /// value this side cannot represent reaches Kotlin as an exception at the
+  /// line that wrote it.
+  private func makeBridgingMarshalledSetter(for varDecl: VarDecl,
+                                            in typeDecl: any JvmTypeDeclSyntax,
+                                            marshalling: JvmMarshalling) throws -> String {
+    let raw = "_set\(varDecl.capitalizedName)"
+    // `value` arrives in its JNI representation; `fromJava` lifts it to the
+    // declared Java-side type before the author's conversion sees it.
+    let mapping = try varDecl.type.fromJava("value")
+    let body =
+"""
+\(mapping.stmts.joined(separator: "\n  "))
+do {
+    let __converted = try (\(marshalling.toSwift.trimmedDescription))(\(mapping.mapped))
+    JObject(recv!).call(method: __JClass__.\(raw),
+                        [(\(marshalling.toJava.trimmedDescription))(__converted).toJavaParameter()])
+  } catch {
+    jni.throwException(error)
+  }
+"""
+    return makeDecl("\(varDecl.name)_set_jni",
+                    in: typeDecl,
+                    paramTypes: paramTypes(typeDecl) + [try varDecl.type.jniType()],
+                    returnType: "Void",
+                    closureParams: closureParams(typeDecl) + ["value"],
+                    body: body,
+                    isReturning: false)
+  }
+
   private func makeBridgingSetter(for varDecl: VarDecl, in typeDecl: any JvmTypeDeclSyntax) throws -> String {
+    if let marshalling = varDecl.marshalling, serializedReceiver(typeDecl) {
+      return try makeBridgingMarshalledSetter(for: varDecl, in: typeDecl, marshalling: marshalling)
+    }
+
     // A computed setter on a serialized peer writes through to storage, so it
     // needs the copy-back a `mutating` method gets: the receiver is a temporary
     // rebuilt from the peer, and without the write-back the assignment lands on

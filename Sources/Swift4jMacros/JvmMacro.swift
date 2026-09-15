@@ -135,7 +135,10 @@ extension JvmMacro: MemberAttributeMacro {
       // against methods the peer does not declare. A computed one is a
       // function, keeps being a method on the peer, and needs its thunks.
       // Statics keep theirs either way.
-      if isSerialized(declaration) && !decl.isStatic && decl.hasStoredBinding {
+      // A stored property that crosses as some other type keeps its thunks:
+      // its setter validates through Swift rather than writing the field.
+      if isSerialized(declaration) && !decl.isStatic && decl.hasStoredBinding
+          && !decl.hasDeclaredMarshalling {
         return []
       }
       return [AttributeSyntax(stringLiteral: "@jvm_exported")]

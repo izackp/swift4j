@@ -83,7 +83,15 @@ public func toJavaObject() -> JavaObject? {
         // assignment target, which here is the Swift type, not the crossed one.
         if let marshalling = prop.marshalling {
           let raw = "(_jvmSource.call(method: \(getter)) as \(marshalling.javaType.trimmedDescription))"
-          return "  self.\(prop.name) = \(prop.swiftValue(from: raw))"
+          // `try!` is load-bearing, not laziness. The field is private and has
+          // exactly two doors: the checked setter and the checked public
+          // constructor, both of which run this same conversion and report a
+          // failure to Java. A value that could not convert never reached the
+          // field, so a throw here would be unreachable — and giving this an
+          // error channel would make `fromJavaObject` throwing, which is a
+          // `JConvertible` requirement that `fromMethod`/`fromField` are built
+          // on: 454 call sites forced to handle an error that cannot happen.
+          return "  self.\(prop.name) = try! \(prop.swiftValue(from: raw))"
         }
         guard let wrapped = prop.type.as(OptionalTypeSyntax.self)?.wrappedType else {
           return "  self.\(prop.name) = _jvmSource.call(method: \(getter))"

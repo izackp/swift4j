@@ -456,6 +456,33 @@ class VarGenerator {
   }
 """
       guard !decl.readonly else { return getter }
+
+      // A property that crosses as some other type can be handed a value this
+      // side cannot represent — a malformed uuid string, say. That is a caller's
+      // mistake, so the write goes through Swift and reports it as an exception
+      // at the line that made it, rather than being stored and failing later at
+      // a crossing, far from the cause.
+      //
+      // The thunk converts the one value and writes the one field. It does not
+      // rebuild the receiver or copy anything else back, so no other member is
+      // read, written, or replaced.
+      guard decl.marshalling == nil else {
+        return getter + "\n\n" +
+"""
+  public void set\(decl.capitalizedName)(\(type) value) {
+    set\(decl.capitalizedName)Impl(value);
+  }
+  private native void set\(decl.capitalizedName)Impl(\(type) value);
+
+  /// Unchecked. Written by the copy-back after a mutating method, where the
+  /// value came from Swift and is valid by construction — and where routing
+  /// through the checked setter would re-enter this peer.
+  void _set\(decl.capitalizedName)(\(type) value) {
+    this.\(decl.name) = value;
+  }
+"""
+      }
+
       return getter + "\n\n" +
 """
   public void set\(decl.capitalizedName)(\(type) value) {

@@ -173,7 +173,27 @@ public final class SerializedRoundTripTest {
         // computed facade, not just the facade.
         Swift4jFixtures.Opaque opaque = SerializedBridge.makeOpaque();
         check("opaque facade crosses", opaque.getText(), "1234567890123");
-        check("hand-written fromJavaObject recovers the storage",
+        check("storage that crosses as another type reads as a field",
+              opaque.getRaw(), "1234567890123");
+
+        // The write goes through Swift, so the conversion is the validator. A
+        // value this side cannot represent is a caller's mistake and surfaces
+        // here, at the line that made it — not later, at some crossing far
+        // from the cause.
+        Swift4jFixtures.Opaque writable = SerializedBridge.makeOpaque();
+        writable.setRaw("999");
+        check("a valid write lands", writable.getRaw(), "999");
+
+        boolean threw = false;
+        try {
+            writable.setRaw("not-a-number");
+        } catch (Throwable t) {
+            threw = true;
+        }
+        checkTrue("a value Swift cannot represent is refused", threw);
+        check("and the field is untouched by the refused write",
+              writable.getRaw(), "999");
+        check("the generated reconstruction recovers the storage",
               SerializedBridge.opaqueRaw(opaque), "1234567890123");
 
         // Optional primitives are boxed on the way out: Optional has no

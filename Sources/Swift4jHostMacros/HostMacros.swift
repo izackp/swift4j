@@ -48,5 +48,5 @@ public macro nonjvm() =
 @attached(peer)
 public macro jvm<Value, Raw>(as: Raw.Type,
                              toJava: (Value) -> Raw,
-                             toSwift: (Raw) -> Value) =
+                             toSwift: (Raw) throws -> Value) =
   #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")

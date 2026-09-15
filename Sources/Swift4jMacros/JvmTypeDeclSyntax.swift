@@ -202,14 +202,19 @@ extension JvmTypeDeclSyntax {
           }.joined(separator: "\n")
         : ""
 
-      // Setters exist only where a `mutating` method can be bridged, since
-      // nothing else writes to a peer from Swift. A derived field's setter is
-      // the package-private `_setX`, because a derived value is not settable
-      // API — only the mutation thunk refreshes it.
-      let setterIds = serializedSupportsMutation
-        ? serializedProperties.compactMap { prop -> String? in
+      // Setters exist where a `mutating` method can be bridged, since nothing
+      // else writes a whole peer from Swift — plus, always, the unchecked
+      // `_setX` of a marshalled property, which its own checked setter writes
+      // through. Routing that through the public setter would re-enter the
+      // native that is currently running.
+      let writtenProperties = serializedSupportsMutation
+        ? serializedProperties
+        : serializedProperties.filter { $0.marshalling != nil }
+      let setterIds = writtenProperties.compactMap { prop -> String? in
             guard let jniType = try? prop.type.jniSignature() else { return nil }
-            let setter = "set\(prop.capitalizedName)"
+            let setter = prop.marshalling != nil
+              ? "_set\(prop.capitalizedName)"
+              : "set\(prop.capitalizedName)"
             return
 """
   static let \(setter): JavaMethodID = {
@@ -220,7 +225,6 @@ extension JvmTypeDeclSyntax {
   } ()
 """
           }.joined(separator: "\n")
-        : ""
 
       return
 """
@@ -377,7 +381,9 @@ extension JvmTypeDeclSyntax {
   /// an object it would not have used.
   func serializedUpdateBody(peer: String, value: String) -> String {
     serializedProperties.map { prop -> String in
-      let setter = "set\(prop.capitalizedName)"
+      let setter = prop.marshalling != nil
+        ? "_set\(prop.capitalizedName)"
+        : "set\(prop.capitalizedName)"
       let crossed = prop.javaValue(of: value)
       let param = prop.type.is(OptionalTypeSyntax.self)
         ? "JavaParameter(object: \(crossed).toJavaObject())"
@@ -426,8 +432,13 @@ extension JvmTypeDeclSyntax {
       // Statics, plus computed instance properties — which are functions, not
       // storage, and so stay methods on the peer rather than becoming fields.
       // Their thunks take no address; the receiver is rebuilt from the fields.
+      // Statics; computed instance properties, which are functions and stay
+      // methods on the peer; and stored properties that cross as another type,
+      // whose setter validates through Swift instead of writing the field.
       let varNativeDecls = exportedDecls.varDecls.filter {
-        $0.isStatic || (serializedDispatchesInstanceMethods && !$0.hasStoredBinding)
+        $0.isStatic
+          || (serializedDispatchesInstanceMethods && !$0.hasStoredBinding)
+          || (serializedDispatchesInstanceMethods && $0.hasDeclaredMarshalling)
       }
       let staticVarNatives: [String] = varNativeDecls.flatMap { decl in
         guard let bridgings = try? decl.bridgings(typeDecl: self) else { return [String]() }

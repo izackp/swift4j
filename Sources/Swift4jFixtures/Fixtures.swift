@@ -425,12 +425,22 @@ public struct HoldsSerialized {
 /// `@jvm(as:toJava:toSwift:)` is the answer. The storage crosses as a `String`,
 /// the reconstruction is generated like any other, and the round trip is
 /// lossless by construction rather than by promise.
+public struct OpaqueParseError: Error, CustomStringConvertible {
+  public let text: String
+  public var description: String { "Opaque: cannot parse raw: \(text)" }
+}
+
 @jvm(serialized: true)
 public struct Opaque {
   @jvm(as: String.self,
        toJava: { (v: UInt64) in String(v) },
-       toSwift: { (s: String) in UInt64(s) ?? 0 })
-  public private(set) var raw: UInt64
+       toSwift: { (s: String) in
+         guard let v = UInt64(s) else {
+           throw OpaqueParseError(text: s)
+         }
+         return v
+       })
+  public var raw: UInt64
 
   public var text: String { String(raw) }
 
