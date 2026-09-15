@@ -115,9 +115,21 @@ extension FunctionTypeSyntax: JvmMappedTypeSyntax {
       stmts.append(contentsOf: call_ret.stmts)
     }
 
+    // Marshalling the arguments creates a JNI local per object, and JNI frees
+    // locals only when a native method returns to Java. A Swift closure handed
+    // to Java is routinely invoked from a thread that never returns — a
+    // dispatch queue, a database observation — so without a frame every
+    // invocation leaks one local per argument, and each pins whatever it
+    // references. A 1800-row snapshot array delivered this way held ~21k
+    // objects alive across a dozen deliveries.
+    //
+    // PopLocalFrame runs after the return expression is evaluated, so a
+    // non-void result is already a Swift value by then.
     return
 """
-\(stmts.joined(separator: "\n  "))
+jni.PushLocalFrame(\(max(parameters.count, 1) + 4))
+  defer { jni.PopLocalFrame(nil) }
+  \(stmts.joined(separator: "\n  "))
 \(call)
 """
   }

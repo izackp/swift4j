@@ -100,6 +100,22 @@ public struct JNI {
 
   public func IsSameObject(_ obj1: JavaObject, _ obj2: JavaObject) -> JavaBoolean { env { $0.IsSameObject($1, obj1, obj2) } }
 
+  /// Opens a local-reference frame; every local made until the matching
+  /// ``PopLocalFrame(_:)`` is released together.
+  ///
+  /// Locals are otherwise reclaimed only when a native method returns to Java.
+  /// Code that calls *into* Java from a thread that never returns — a Swift
+  /// dispatch queue, a GRDB observation, any attached native thread — therefore
+  /// accumulates them for the life of the thread, and each one pins whatever it
+  /// references.
+  @discardableResult
+  public func PushLocalFrame(_ capacity: JavaInt) -> JavaInt { env { $0.PushLocalFrame($1, capacity) } }
+
+  /// Closes the frame opened by ``PushLocalFrame(_:)``. Pass a reference to
+  /// carry it out into the enclosing frame, or `nil` to release everything.
+  @discardableResult
+  public func PopLocalFrame(_ result: JavaObject) -> JavaObject? { env { $0.PopLocalFrame($1, result) } }
+
   public func NewObject(_ cls: JavaClass, _ ctor: JavaMethodID, _ params: [JavaParameter]) -> JavaObject? { env { $0.NewObject($1, cls, ctor, params) } }
   public func GetObjectClass(_ obj: JavaObject) -> JavaClass? { env { $0.GetObjectClass($1, obj) } }
 
