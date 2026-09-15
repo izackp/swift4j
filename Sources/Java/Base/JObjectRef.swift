@@ -27,15 +27,20 @@ public final class JObjectRef<T: JObjectConvertible & AnyObject>: @unchecked Sen
 
   public func from(_ obj: T) -> JavaObject {
     return withLock { jobj in
-      if let jobj = jobj {
-        return jobj.ptr
+      // The cached peer is held weakly: it is the back-edge to the object that
+      // owns this Swift instance, so pinning it would make a cross-runtime
+      // cycle neither collector could break. That means two things here — the
+      // reference must be promoted before it can be used, and a promotion that
+      // fails means the peer was collected and a fresh one is needed.
+      if let cached = jobj, let local = cached.localRef() {
+        return local
       }
 
       let params = [JavaLong(Int(bitPattern: Unmanaged.passRetained(obj).toOpaque())).toJavaParameter()]
-      jobj = JObject(T.javaClass.callStaticObjectMethod(method: "fromPtr", sig: "(J)\(T.javaSignature)", params)!, weak: true)
+      let peer = JObject(T.javaClass.callStaticObjectMethod(method: "fromPtr", sig: "(J)\(T.javaSignature)", params)!, weak: true)
+      jobj = peer
 
-
-      return jobj!.ptr
+      return peer.localRef() ?? peer.ptr
     }
   }
 

@@ -28,7 +28,30 @@ public class JObject: @unchecked Sendable {
       jni.DeleteGlobalRef(self.ptr)
     }
   }
-  
+
+  /// A reference usable in JNI calls, or `nil` when a weak peer has already
+  /// been collected.
+  ///
+  /// `ptr` holds a `jweak` in weak mode, and a weak global may not be passed to
+  /// JNI directly — it has to be promoted to a local ref, which also reports
+  /// whether the object is still alive. The returned local belongs to the
+  /// current JNI frame; use ``withObject(_:)`` instead when the reference does
+  /// not escape, so it is released immediately rather than at frame exit.
+  public func localRef() -> JavaObject? {
+    guard weak else { return ptr }
+    return jni.NewLocalRef(ptr)
+  }
+
+  /// Runs `body` against a promoted reference, releasing it afterwards.
+  /// Returns `nil` without calling `body` if a weak peer has been collected.
+  public func withObject<T>(_ body: (JavaObject) throws -> T) rethrows -> T? {
+    guard weak else { return try body(ptr) }
+    guard let local = jni.NewLocalRef(ptr) else { return nil }
+    defer { jni.DeleteLocalRef(local) }
+    return try body(local)
+  }
+
+
 
   public func get<T: JConvertible>(field: JavaFieldID) -> T {
     return T.fromField(field, of: ptr)

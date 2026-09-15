@@ -61,10 +61,12 @@ extension SwiftArray: JObjectConvertible {
   }
   
   public func toJavaObject() -> JavaObject? {
-    if jobj == nil {
-      jobj = JObject(Self.javaClass.create(JavaLong(Int(bitPattern: Unmanaged.passRetained(self).toOpaque()))), weak: true)
+    if let cached = jobj, let local = cached.localRef() {
+      return local
     }
-    return jobj?.ptr
+    let peer = JObject(Self.javaClass.create(JavaLong(Int(bitPattern: Unmanaged.passRetained(self).toOpaque()))), weak: true)
+    jobj = peer
+    return peer.localRef() ?? peer.ptr
   }
 }
 
