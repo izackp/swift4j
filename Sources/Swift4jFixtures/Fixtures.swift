@@ -238,6 +238,21 @@ public struct SerializedLeaf {
     self.label = label
     self.weight = weight
   }
+
+  /// A `mutating` method on a peer with no pointer. The receiver is rebuilt
+  /// from the peer's fields, so the write has to be copied back through the
+  /// peer's setters or it would land on the temporary and vanish. Every
+  /// property here marshals and is `var`, which is what allows it.
+  public mutating func rename(to newLabel: String) {
+    label = newLabel
+  }
+
+  /// Mutates *and* returns, to pin that the copy-back runs after the return
+  /// value is computed rather than instead of it.
+  public mutating func scale(by factor: Double) -> Double {
+    weight *= factor
+    return weight
+  }
 }
 
 /// Unmarshalled storage a reconstruction can still recover: `blob` is

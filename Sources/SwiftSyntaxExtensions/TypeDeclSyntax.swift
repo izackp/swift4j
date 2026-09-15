@@ -96,6 +96,29 @@ public extension TypeDeclSyntax {
     isSerialized && isSerializedReconstructible
   }
 
+  /// Whether a `mutating` method can be bridged: the thunk rebuilds the
+  /// receiver, runs the mutation on that temporary, then copies every stored
+  /// property back through the peer's setter, which is what makes the write
+  /// visible to Java.
+  ///
+  /// Stricter than `serializedDispatchesInstanceMethods` on purpose. Reads
+  /// tolerate an unmarshalled `Optional` stored property, because rebuilding it
+  /// as `nil` costs a reader nothing. A write cannot: the mutation would land
+  /// on a property with no field to copy back to and vanish silently, which is
+  /// worse than refusing the method. A `let` is excluded for the same reason —
+  /// the peer declares no setter to write through.
+  var serializedSupportsMutation: Bool {
+    guard serializedDispatchesInstanceMethods else { return false }
+    for member in memberBlock.members {
+      guard let decl = member.decl.as(VariableDeclSyntax.self),
+            !decl.isStatic else { continue }
+      guard decl.bindings.contains(where: { $0.accessorBlock == nil }) else { continue }
+      if !decl.isExported { return false }
+      if decl.bindingSpecifier.tokenKind == .keyword(.let) { return false }
+    }
+    return true
+  }
+
   var parents: [any TypeDeclSyntax] {
     var parents: [any TypeDeclSyntax] = []
     var cur: any TypeDeclSyntax = self

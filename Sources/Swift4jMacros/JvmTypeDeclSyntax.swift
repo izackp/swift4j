@@ -202,6 +202,24 @@ extension JvmTypeDeclSyntax {
           }.joined(separator: "\n")
         : ""
 
+      // Setters exist only where a `mutating` method can be bridged, since
+      // nothing else writes to a peer from Swift.
+      let setterIds = serializedSupportsMutation
+        ? serializedStoredProperties.compactMap { prop -> String? in
+            guard let jniType = try? prop.type.jniSignature() else { return nil }
+            let setter = "set\(prop.capitalizedName)"
+            return
+"""
+  static let \(setter): JavaMethodID = {
+    guard let mid = shared.getMethodID(name: "\(setter)", sig: "(\(jniType))V") else {
+      fatalError("Could not find \(fqn).\(setter)")
+    }
+    return mid
+  } ()
+"""
+          }.joined(separator: "\n")
+        : ""
+
       return
 """
 private enum __JClass__ {
@@ -226,6 +244,7 @@ private enum __JClass__ {
     return mid
   } ()
 \(getterIds)
+\(setterIds)
 }
 
 public nonisolated static var javaName: String { __JClass__.name }
@@ -329,6 +348,19 @@ extension JvmTypeDeclSyntax {
       .filter { !$0.computed }
   }
 
+  /// Copies every stored property of `value` back onto the Java peer held by
+  /// `receiver`, which is how a `mutating` method's write becomes visible to
+  /// the caller. Mirrors `expandToJavaObject`'s outbound conversion, including
+  /// its Optional boxing: a nullable field's setter takes `Integer`, not `int`.
+  func serializedWriteback(receiver: String, value: String) -> String {
+    serializedStoredProperties.map { prop -> String in
+      let arg = prop.type.is(OptionalTypeSyntax.self)
+        ? "JavaParameter(object: \(value).\(prop.name).toJavaObject())"
+        : "\(value).\(prop.name).toJavaParameter()"
+      return "  \(receiver).call(method: __JClass__.set\(prop.capitalizedName), [\(arg)])"
+    }.joined(separator: "\n")
+  }
+
   /// Unmarshalled stored properties a reconstruction must assign itself.
   ///
   /// An unexported `Optional` with no default has no value to carry across and
@@ -380,7 +412,7 @@ extension JvmTypeDeclSyntax {
         .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
         .enumerated()
         .filter { serializedDispatchesInstanceMethods || $0.element.isStatic }
-        .filter { $0.element.isStatic || !$0.element.isMutating }
+        .filter { $0.element.isStatic || serializedSupportsMutation || !$0.element.isMutating }
         .compactMap { (index, decl) in
           guard let jniSig = try? decl.jniSignature(serializedReceiver: !decl.isStatic) else { return nil }
           let bridge = decl.bridgeName

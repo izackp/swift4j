@@ -51,15 +51,19 @@ extension FunctionDeclSyntax {
 
   func makeBridgingDecls(typeDecl: any JvmTypeDeclSyntax, num: Int? = nil) throws -> String {
     // An instance method on a serialized peer reconstructs its receiver from
-    // the peer's fields. A `mutating` one would mutate that temporary and
-    // discard it, leaving the Java object silently unchanged, so it is refused
-    // rather than bridged.
+    // the peer's fields. A `mutating` one then has to copy the result back, or
+    // the write lands on the temporary and the Java object is silently
+    // unchanged — which is only possible where every stored property both
+    // marshals and has a setter.
     let serializedReceiver = typeDecl.serializedDispatchesInstanceMethods && !isStatic
-    if serializedReceiver && isMutating {
+    let writesBack = serializedReceiver && isMutating
+    if writesBack && !typeDecl.serializedSupportsMutation {
       throw JvmMacrosError.message(
         "`mutating func \(name.text)` cannot be bridged on `@jvm(serialized:)` type "
         + "`\(typeDecl.typeName)`: the receiver is rebuilt from the Java peer's fields, "
-        + "so the mutation would be discarded. Mark it `@nonjvm`, or return a new value.")
+        + "and the mutation cannot be written back because at least one stored property "
+        + "is `@nonjvm` (nothing to write to) or `let` (no setter). Mark the method "
+        + "`@nonjvm`, or return a new value.")
     }
 
     let paramTypes = try
@@ -75,9 +79,25 @@ extension FunctionDeclSyntax {
 
     let _self = isStatic
       ? "\(typeDecl.typeName).self"
+      : writesBack
+      ? "__self"
       : serializedReceiver
       ? "\(typeDecl.typeName).fromJavaObject(recv)"
       : typeDecl.selfExpr
+
+    // `defer`, so the copy-back runs after the return expression is evaluated
+    // and on the throwing path too — matching where Swift writes an `inout`
+    // argument back.
+    let prologue = writesBack
+      ? """
+        var __self = \(typeDecl.typeName).fromJavaObject(recv)
+          let __peer = JObject(recv!)
+          defer {
+        \(typeDecl.serializedWriteback(receiver: "__peer", value: "__self"))
+          }
+
+        """
+      : ""
 
     var name = bridgeName
 
@@ -89,7 +109,7 @@ extension FunctionDeclSyntax {
 """
 fileprivate typealias \(name)_jni_t = @convention(c)(\(paramTypes.joined(separator: ", "))) -> \(returnType)
 fileprivate static let \(name)_jni: \(name)_jni_t = {\(closureParams.joined(separator: ", ")) in
-  \(wrapBody(try makeBridgingFunctionBody(selfExpr: _self), in: typeDecl))
+  \(prologue)\(wrapBody(try makeBridgingFunctionBody(selfExpr: _self), in: typeDecl))
 }
 """
   }

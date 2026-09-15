@@ -52,6 +52,34 @@ final class SerializedNativeAgreementTests: XCTestCase {
   /// `Row` as a bare name and agree to register a borrow native for it; only
   /// the CLI knows the peer has no `Borrowed` view, so it declares the native
   /// and suppresses the public wrapper.
+  /// Reconstructible, but not mutable: `blob` is `@nonjvm` and Optional, which
+  /// rebuilds as nil for a *read* and has no field to copy a *write* back to.
+  /// Non-mutating methods bridge; `mutating` ones must not.
+  @jvm(serialized: true)
+  public struct PartlyMarshalled {
+    public var label: String
+    @nonjvm public var blob: Data?
+    public init(label: String, blob: Data? = nil) {
+      self.label = label
+      self.blob = blob
+    }
+    public func describe() -> String { label }
+    public mutating func wipe() { blob = nil }
+  }
+
+  /// Reconstructible and fully marshalled, but `id` is a `let`, so the peer
+  /// declares no setter to write it back through.
+  @jvm(serialized: true)
+  public struct Frozen {
+    public let id: Int
+    public var label: String
+    public init(id: Int, label: String) {
+      self.id = id
+      self.label = label
+    }
+    public mutating func retitle(_ v: String) { label = v }
+  }
+
   /// Not reconstructible: `raw` is `@nonjvm` and not Optional, so the macro
   /// emits no `fromJavaObject` and an instance method has nothing to rebuild a
   /// receiver from. Both sides must therefore still drop `describeRaw`.
@@ -228,6 +256,24 @@ final class SerializedNativeAgreementTests: XCTestCase {
     XCTAssertEqual(registered, declared,
                    "registered-but-not-declared: \(registered.subtracting(declared)); "
                    + "declared-but-not-registered: \(declared.subtracting(registered))")
+  }
+
+  /// A `mutating` method bridges only where the write can be copied back, so
+  /// the two gates are asserted separately: an unmarshalled stored property
+  /// (nothing to write to) and a `let` (no setter to write through). In both
+  /// cases the read-only methods must be unaffected.
+  func testMutatingIsRefusedWhereTheWriteCannotBeCopiedBack() throws {
+    let partial = try macroRegisteredNatives(forTypeNamed: "PartlyMarshalled")
+    XCTAssertTrue(partial.contains("describeImpl"),
+                  "a read still bridges: the unmarshalled Optional rebuilds as nil")
+    XCTAssertFalse(partial.contains("wipeImpl"),
+                   "but a write to it has no field to land in")
+    XCTAssertEqual(partial, try javaDeclaredNatives(forTypeNamed: "PartlyMarshalled"))
+
+    let frozen = try macroRegisteredNatives(forTypeNamed: "Frozen")
+    XCTAssertFalse(frozen.contains("retitleImpl"),
+                   "a `let` property leaves the peer with no setter to write through")
+    XCTAssertEqual(frozen, try javaDeclaredNatives(forTypeNamed: "Frozen"))
   }
 
   /// A static has no receiver to have been marshalled, so it keeps its native

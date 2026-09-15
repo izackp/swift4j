@@ -101,6 +101,38 @@ public final class SerializedRoundTripTest {
         check("a Java-side write reaches the rebuilt receiver",
               fresh.summarize(), "42:edited:leaf:inner");
 
+        // ---- mutating methods: copy-in, mutate, copy-out ----
+        // The receiver is a temporary rebuilt from the peer's fields, so the
+        // only thing that makes the write visible here is the copy-back
+        // through the peer's setters. Without it these read unchanged.
+        SerializedLeaf leaf = row.getSerializedLeaf();
+        check("mutable peer starts as marshalled", leaf.getLabel(), "inner");
+        leaf.rename("renamed");
+        check("a mutating method's write reaches the peer", leaf.getLabel(), "renamed");
+
+        // Mutates and returns: the copy-back runs after the return value is
+        // computed, so both the result and the field must be right.
+        check("a mutating method still returns its value", leaf.scale(4.0), 10.0);
+        check("and the mutation landed too", leaf.getWeight(), 10.0);
+
+        // Copy-out writes the whole value, so an untouched property must come
+        // back unchanged rather than reset to a default.
+        check("an untouched property survives the copy-back", leaf.getLabel(), "renamed");
+
+        // Diverges from Swift, and pinned here because it is the surprising
+        // half: a nested serialized peer is a Java *reference* held in the
+        // container's field, so the getter hands back the same object every
+        // time and the mutation shows through the container. Reading
+        // `row.serializedLeaf` in Swift would have copied it.
+        //
+        // Nothing reaches the Swift side either way — `row` is itself a
+        // detached snapshot — so this changes what a Java caller observes, not
+        // what the database holds.
+        checkTrue("the nested peer is shared by reference, not copied",
+                  row.getSerializedLeaf() == leaf);
+        check("so the container observes the mutation",
+              row.getSerializedLeaf().getLabel(), "renamed");
+
         // ---- the escape hatch: a type whose storage is not marshalled ----
         // Opaque's only storage is @nonjvm, so the macro generates no
         // reconstruction and the author supplies one. Round-tripping proves

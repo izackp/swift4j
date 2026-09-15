@@ -101,7 +101,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
     let staticVars = varGens.filter { $0.isStatic }
     let staticMethods = methodGens.filter { $0.isStatic }
     let instanceMethods = typeDecl.serializedDispatchesInstanceMethods
-      ? methodGens.filter { !$0.isStatic && !$0.isMutating }
+      ? methodGens.filter { !$0.isStatic && (typeDecl.serializedSupportsMutation || !$0.isMutating) }
       : []
 
     let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx) }
