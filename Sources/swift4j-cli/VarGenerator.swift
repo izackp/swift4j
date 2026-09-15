@@ -379,9 +379,15 @@ class VarGenerator {
   /// peer is a *detached copy* and writing to one is how the edit-buffer
   /// pattern works: copy, mutate, hand back. A `let` or a get-only computed
   /// property has nothing to write to, so it stays final.
-  func serializedFieldDecls(with ctx: inout Context) -> String {
+  /// `mutable` drops `final` from the derived fields. A peer that can be
+  /// mutated has to be able to refresh them: a computed property is evaluated
+  /// once at marshal time, so leaving it final would let the peer keep
+  /// reporting a value derived from storage that a `mutating` method has since
+  /// replaced — `flag == true` on a row whose `id` is now negative. They stay
+  /// unsettable from Java either way; only `_writeback` assigns them.
+  func serializedFieldDecls(with ctx: inout Context, mutable: Bool = false) -> String {
     serializedDecls.map {
-      let modifier = $0.readonly ? "private final" : "private"
+      let modifier = ($0.readonly && !mutable) ? "private final" : "private"
       return "  \(modifier) \($0.type.map(with: &ctx)) \($0.name);"
     }.joined(separator: "\n")
   }
@@ -452,6 +458,20 @@ class VarGenerator {
       return getter + "\n\n" +
 """
   public void set\(decl.capitalizedName)(\(type) value) {
+    this.\(decl.name) = value;
+  }
+"""
+    }.joined(separator: "\n\n")
+  }
+
+  /// Package-private setters for the derived (get-only) fields of a peer that
+  /// can be mutated. Only the mutation thunk calls these — a derived value is
+  /// not settable API — and without them the field could not be refreshed after
+  /// a `mutating` method changed the storage it is computed from.
+  func serializedDerivedSetters(with ctx: inout Context) -> String {
+    serializedDecls.filter { $0.readonly }.map { decl in
+"""
+  void _set\(decl.capitalizedName)(\(decl.type.map(with: &ctx)) value) {
     this.\(decl.name) = value;
   }
 """

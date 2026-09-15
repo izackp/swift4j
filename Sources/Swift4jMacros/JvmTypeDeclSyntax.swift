@@ -203,11 +203,13 @@ extension JvmTypeDeclSyntax {
         : ""
 
       // Setters exist only where a `mutating` method can be bridged, since
-      // nothing else writes to a peer from Swift.
+      // nothing else writes to a peer from Swift. A derived field's setter is
+      // the package-private `_setX`, because a derived value is not settable
+      // API — only the mutation thunk refreshes it.
       let setterIds = serializedSupportsMutation
-        ? serializedStoredProperties.compactMap { prop -> String? in
+        ? serializedProperties.compactMap { prop -> String? in
             guard let jniType = try? prop.type.jniSignature() else { return nil }
-            let setter = "set\(prop.capitalizedName)"
+            let setter = prop.computed ? "_set\(prop.capitalizedName)" : "set\(prop.capitalizedName)"
             return
 """
   static let \(setter): JavaMethodID = {
@@ -348,16 +350,49 @@ extension JvmTypeDeclSyntax {
       .filter { !$0.computed }
   }
 
-  /// Copies every stored property of `value` back onto the Java peer held by
-  /// `receiver`, which is how a `mutating` method's write becomes visible to
-  /// the caller. Mirrors `expandToJavaObject`'s outbound conversion, including
-  /// its Optional boxing: a nullable field's setter takes `Integer`, not `int`.
-  func serializedWriteback(receiver: String, value: String) -> String {
-    serializedStoredProperties.map { prop -> String in
-      let arg = prop.type.is(OptionalTypeSyntax.self)
+  /// Body of `updateJavaObject`: writes `self` into an existing peer.
+  ///
+  /// Writes **every** marshalled property, not just the stored ones. A computed
+  /// property is marshalled as a field evaluated once, so leaving it alone
+  /// would let the peer keep reporting a derived value that the mutation has
+  /// invalidated — a row whose `id` is now negative still answering `flag ==
+  /// true`.
+  ///
+  /// A property whose value is itself updatable is recursed into rather than
+  /// replaced, so a reference a caller already holds to that nested object
+  /// stays attached and sees the new values. Everything else goes through the
+  /// setter, using `expandToJavaObject`'s conversions — including the Optional
+  /// boxing a nullable field needs (`Integer`, not `int`).
+  ///
+  /// The `as?` is tested before the getter is called so a leaf — `String`,
+  /// `Data`, `Date` — short-circuits without paying a JNI round trip to fetch
+  /// an object it would not have used.
+  func serializedUpdateBody(peer: String, value: String) -> String {
+    serializedProperties.map { prop -> String in
+      let setter = prop.computed ? "_set\(prop.capitalizedName)" : "set\(prop.capitalizedName)"
+      let param = prop.type.is(OptionalTypeSyntax.self)
         ? "JavaParameter(object: \(value).\(prop.name).toJavaObject())"
         : "\(value).\(prop.name).toJavaParameter()"
-      return "  \(receiver).call(method: __JClass__.set\(prop.capitalizedName), [\(arg)])"
+      let assign = "\(peer).call(method: __JClass__.\(setter), [\(param)])"
+
+      // A derived field is recomputed wholesale: there is no identity to
+      // preserve in a value that is defined as a function of the others, and
+      // no getter id is emitted for one.
+      guard !prop.computed else { return "  \(assign)" }
+
+      let bind = prop.type.is(OptionalTypeSyntax.self)
+        ? "let __v_\(prop.name) = \(value).\(prop.name), let __u_\(prop.name) = __v_\(prop.name) as? JObjectUpdatable"
+        : "let __u_\(prop.name) = \(value).\(prop.name) as? JObjectUpdatable"
+
+      return
+"""
+  if \(bind),
+     let __c_\(prop.name) = \(peer).callObjectMethod(method: __JClass__.get\(prop.capitalizedName), []) {
+    __u_\(prop.name).updateJavaObject(__c_\(prop.name))
+  } else {
+    \(assign)
+  }
+"""
     }.joined(separator: "\n")
   }
 

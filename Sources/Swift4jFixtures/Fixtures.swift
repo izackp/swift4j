@@ -312,6 +312,19 @@ public struct SerializedRow {
 
   public static func describe() -> String { "row" }
 
+  /// Probe: mutates one stored property on a type that also has a computed
+  /// property, a nested handle peer and a Date.
+  public mutating func demote() {
+    id = -1
+  }
+
+  /// Probe: mutates *through* the nested members, so the Java objects a caller
+  /// already holds have to observe the new values without being replaced.
+  public mutating func relabelChildren(_ label: String) {
+    serializedLeaf.label = label
+    handleLeaf.label = label
+  }
+
   /// Instance methods on a serialized peer. The native takes no pointer; JNI
   /// passes the peer as the receiver and the thunk rebuilds this value from the
   /// marshalled fields, so `self` here is a copy reconstructed per call. Reads

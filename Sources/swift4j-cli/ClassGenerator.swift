@@ -104,7 +104,8 @@ extension ClassGenerator: TypeGeneratorProtocol {
       ? methodGens.filter { !$0.isStatic && (typeDecl.serializedSupportsMutation || !$0.isMutating) }
       : []
 
-    let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx) }
+    let mutable = typeDecl.serializedSupportsMutation
+    let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx, mutable: mutable) }
       .filter { !$0.isEmpty }
       .joined(separator: "\n")
 
@@ -121,6 +122,18 @@ extension ClassGenerator: TypeGeneratorProtocol {
 \(assignments.joined(separator: "\n"))
   }
 """
+
+    // A computed property is marshalled as a field evaluated once. Where a
+    // `mutating` method can be bridged, that field has to be refreshable or the
+    // peer keeps reporting a derived value its own storage no longer implies —
+    // `flag == true` on a row whose `id` is now negative. It gets a
+    // package-private setter rather than a public one: it is not API, and only
+    // the mutation thunk assigns it.
+    let derivedSetters = mutable
+      ? instanceVars.map { $0.serializedDerivedSetters(with: &ctx) }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+      : ""
 
     let accessors = instanceVars.map { $0.generateSerialized(with: &ctx) }
       .filter { !$0.isEmpty }
@@ -169,6 +182,7 @@ public \(nested ? "static" : "") class \(name) {
 \(ctor)
 
 \(accessors)
+\(derivedSetters)
 \(equality)
 \(staticMembers)
 

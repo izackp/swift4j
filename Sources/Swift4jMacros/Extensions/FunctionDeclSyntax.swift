@@ -91,10 +91,7 @@ extension FunctionDeclSyntax {
     let prologue = writesBack
       ? """
         var __self = \(typeDecl.typeName).fromJavaObject(recv)
-          let __peer = JObject(recv!)
-          defer {
-        \(typeDecl.serializedWriteback(receiver: "__peer", value: "__self"))
-          }
+          defer { __self.updateJavaObject(recv!) }
 
         """
       : ""

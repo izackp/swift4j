@@ -102,6 +102,14 @@ public static func fromJavaObject(_ obj: JavaObject?) -> Self {
 public func toJavaObject() -> JavaObject? {
   \(expandToJavaObject(in: context))
 }
+\(serializedSupportsMutation ?
+"""
+
+public func updateJavaObject(_ obj: JavaObject) {
+  let __peer = JObject(obj)
+\(serializedUpdateBody(peer: "__peer", value: "self"))
+}
+""" : "")
 """
     }
 
@@ -127,6 +135,13 @@ public static func fromJavaObject(_ obj: JavaObject?) -> Self {
 
 public func toJavaObject() -> JavaObject? {
   \(expandToJavaObject(in: context))
+}
+
+/// Writes through the address the peer already boxes, so the Java object a
+/// caller holds keeps its identity and observes the new value — and no fresh
+/// native allocation is made per update.
+public func updateJavaObject(_ obj: JavaObject) {
+  Self._self(obj).pointee = self
 }
 """
   }

@@ -83,8 +83,22 @@ final class SerializedPeerTests: XCTestCase {
 
     // Nothing can be lazy without a pointer, so a computed property is
     // evaluated once at marshal time or not exposed at all.
-    XCTAssertTrue(snapshot.contains("private final boolean flag;"))
+    XCTAssertTrue(snapshot.contains("private boolean flag;"))
     XCTAssertTrue(snapshot.contains("public boolean getFlag()"))
+  }
+
+  /// Not `final`, because this peer can be mutated: a `mutating` method changes
+  /// the storage `flag` is derived from, and the copy-back has to refresh it or
+  /// the peer reports a value its own fields no longer imply. The setter is
+  /// package-private — refreshing a derived value is not settable API.
+  func testDerivedFieldIsRefreshableOnAMutablePeer() throws {
+    let snapshot = try XCTUnwrap(generate()["Snapshot"])
+
+    XCTAssertFalse(snapshot.contains("private final boolean flag;"),
+                   "a refreshable derived field cannot be final")
+    XCTAssertTrue(snapshot.contains("void _setFlag(boolean value)"))
+    XCTAssertFalse(snapshot.contains("public void _setFlag"),
+                   "and it is not public API")
   }
 
   func testAllFieldsConstructorIsPublicAndInDeclarationOrder() throws {
@@ -128,9 +142,8 @@ final class SerializedPeerTests: XCTestCase {
     XCTAssertTrue(snapshot.contains("private long count;"),
                   "a settable field cannot be final")
 
-    XCTAssertFalse(snapshot.contains("setFlag"),
-                   "a get-only computed property has no storage to write")
-    XCTAssertTrue(snapshot.contains("private final boolean flag;"))
+    XCTAssertFalse(snapshot.contains("public void setFlag"),
+                   "a get-only computed property is not settable API")
   }
 
   /// An instance setter writes a Java field and does not reach through a

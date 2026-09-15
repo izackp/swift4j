@@ -33,6 +33,13 @@ public struct JvmMacro {
     return false
   }
 
+  /// Same reach-through for the mutation gate.
+  static func supportsMutation(_ declaration: some DeclGroupSyntax) -> Bool {
+    if let decl = declaration.as(StructDeclSyntax.self) { return decl.serializedSupportsMutation }
+    if let decl = declaration.as(EnumDeclSyntax.self) { return decl.serializedSupportsMutation }
+    return false
+  }
+
   /// `serialized:` means "copy the value across instead of handing out a
   /// pointer", which only makes sense for a value type with fields.
   ///
@@ -176,10 +183,24 @@ extension JvmMacro: ExtensionMacro {
     // of a class-typed property would yield the address of the reference.
     // A serialized peer has no address to lend, so it cannot satisfy
     // JvmPointerBoxed's `fromUnownedPointer` and must not claim to.
+    // JObjectUpdatable is what lets a nested member be written in place rather
+    // than replaced, so a reference already held on the Java side does not
+    // detach. A pointer-backed value type writes through its address; a
+    // serialized one assigns field by field, but only where it can be mutated
+    // at all. A class is excluded: its peer refers to the object, and a
+    // property holding a different instance cannot be updated into the old one.
     let isValueType = declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self)
-    let conformances = (isValueType && !isSerialized(declaration))
+    var conformances = (isValueType && !isSerialized(declaration))
       ? "JObjectConvertible, JvmPointerBoxed"
       : "JObjectConvertible"
+
+    // Structs only. An enum's peer is a sealed hierarchy or an ordinal, with no
+    // address to write through and no field list to assign, so it has nothing
+    // to update in place.
+    let isStruct = declaration.is(StructDeclSyntax.self)
+    if isStruct && (!isSerialized(declaration) || supportsMutation(declaration)) {
+      conformances += ", JObjectUpdatable"
+    }
 
     let extSyntax =
 """

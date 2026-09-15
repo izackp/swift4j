@@ -120,7 +120,7 @@ public final class SerializedRoundTripTest {
         check("an untouched property survives the copy-back", leaf.getLabel(), "renamed");
 
         // Diverges from Swift, and pinned here because it is the surprising
-        // half: a nested serialized peer is a Java *reference* held in the
+        // half: a nested serialized value is a Java *reference* held in the
         // container's field, so the getter hands back the same object every
         // time and the mutation shows through the container. Reading
         // `row.serializedLeaf` in Swift would have copied it.
@@ -128,10 +128,43 @@ public final class SerializedRoundTripTest {
         // Nothing reaches the Swift side either way — `row` is itself a
         // detached snapshot — so this changes what a Java caller observes, not
         // what the database holds.
-        checkTrue("the nested peer is shared by reference, not copied",
+        checkTrue("a nested value is shared by reference, not copied",
                   row.getSerializedLeaf() == leaf);
         check("so the container observes the mutation",
               row.getSerializedLeaf().getLabel(), "renamed");
+
+        // ---- what else does the copy-back touch? ----
+        // The copy-back writes the whole value, so it has to leave everything
+        // the method did not change exactly as it was — including the identity
+        // of the Java objects a caller may already be holding.
+        SerializedRow probe = SerializedBridge.makeRow();
+        Leaf beforeHandle = probe.getHandleLeaf();
+        SerializedLeaf beforeNested = probe.getSerializedLeaf();
+        long beforeStamp = probe.getStamp().getTime();
+        boolean beforeFlag = probe.getFlag();
+
+        probe.demote();
+
+        check("the mutated property lands", probe.getId(), -1L);
+        check("a derived field is recomputed, not left stale",
+              probe.getFlag(), false);
+        check("and it really did change", beforeFlag, true);
+        checkTrue("an untouched nested handle keeps its identity",
+                  probe.getHandleLeaf() == beforeHandle);
+        checkTrue("an untouched nested value keeps its identity",
+                  probe.getSerializedLeaf() == beforeNested);
+        check("Date is unchanged by the copy-back", probe.getStamp().getTime(), beforeStamp);
+
+        // The point of updating in place rather than replacing: a reference
+        // taken *before* the mutation must observe the new value, not sit on a
+        // detached object still reporting the old one.
+        probe.relabelChildren("relabelled");
+        check("a reference held across the call sees the new value",
+              beforeNested.getLabel(), "relabelled");
+        check("same for a handle-backed member",
+              beforeHandle.getLabel(), "relabelled");
+        checkTrue("and was updated, not replaced",
+                  probe.getSerializedLeaf() == beforeNested);
 
         // ---- the escape hatch: a type whose storage is not marshalled ----
         // Opaque's only storage is @nonjvm, so the macro generates no
