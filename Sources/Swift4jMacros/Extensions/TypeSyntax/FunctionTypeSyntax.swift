@@ -128,7 +128,7 @@ extension FunctionTypeSyntax: JvmMappedTypeSyntax {
     return
 """
 jni.PushLocalFrame(\(max(parameters.count, 1) + 4))
-  defer { jni.PopLocalFrame(nil) }
+  defer { jni.PopLocalFrame() }
   \(stmts.joined(separator: "\n  "))
 \(call)
 """

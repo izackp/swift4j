@@ -111,10 +111,20 @@ public struct JNI {
   @discardableResult
   public func PushLocalFrame(_ capacity: JavaInt) -> JavaInt { env { $0.PushLocalFrame($1, capacity) } }
 
-  /// Closes the frame opened by ``PushLocalFrame(_:)``. Pass a reference to
-  /// carry it out into the enclosing frame, or `nil` to release everything.
+  /// Closes the frame opened by ``PushLocalFrame(_:)``, carrying `result` out
+  /// into the enclosing frame.
   @discardableResult
   public func PopLocalFrame(_ result: JavaObject) -> JavaObject? { env { $0.PopLocalFrame($1, result) } }
+
+  /// Closes the frame opened by ``PushLocalFrame(_:)``, releasing every local
+  /// made inside it.
+  ///
+  /// `JavaObject` imports as non-optional on Android, so JNI's "no result"
+  /// null cannot be written directly.
+  public func PopLocalFrame() {
+    let noResult = unsafeBitCast(UInt(0), to: JavaObject.self)
+    env { _ = $0.PopLocalFrame($1, noResult) }
+  }
 
   public func NewObject(_ cls: JavaClass, _ ctor: JavaMethodID, _ params: [JavaParameter]) -> JavaObject? { env { $0.NewObject($1, cls, ctor, params) } }
   public func GetObjectClass(_ obj: JavaObject) -> JavaClass? { env { $0.GetObjectClass($1, obj) } }
