@@ -10,6 +10,10 @@ extension FunctionDeclSyntax: MemberDeclSyntax {
     signature.effectSpecifiers?.throwsClause != nil
   }
 
+  public var isMutating: Bool {
+    modifiers.contains { $0.name.tokenKind == .keyword(.mutating) }
+  }
+
   /// `==` or `!=`.
   public var isEqualityOperator: Bool {
     name.text == "==" || name.text == "!="

@@ -148,15 +148,26 @@ final class SerializedPeerTests: XCTestCase {
   }
 
   /// A static has no receiver to have been marshalled, so it stays
-  /// native-backed. An instance method has no pointer to dispatch on, so it
-  /// goes — and the macro drops its native from the same check.
-  func testStaticsSurviveAndInstanceMethodsDoNot() throws {
+  /// native-backed. An instance method survives too, as a native taking no
+  /// pointer: JNI passes the peer as the receiver and the thunk rebuilds the
+  /// Swift value from the marshalled fields.
+  func testStaticsAndInstanceMethodsBothSurvive() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
     XCTAssertTrue(snapshot.contains("getVersion"), "a static property survives")
     XCTAssertTrue(snapshot.contains("describe"), "a static method survives")
-    XCTAssertFalse(snapshot.contains("touch"),
-                   "an instance method cannot dispatch without a pointer")
+    XCTAssertTrue(snapshot.contains("touch"), "an instance method survives")
+  }
+
+  /// The shape of the surviving instance method: no `long ptr` anywhere, since
+  /// there is no address to pass and `_ptr()` does not exist on this peer.
+  func testInstanceMethodNativeTakesNoPointer() throws {
+    let snapshot = try XCTUnwrap(generate()["Snapshot"])
+
+    XCTAssertTrue(snapshot.contains("native void touchImpl()"),
+                  "the native takes only the declared parameters")
+    XCTAssertFalse(snapshot.contains("touchImpl(_ptr()"),
+                   "a serialized peer has no _ptr() to pass")
   }
 
   func testClassInitSurvives() throws {

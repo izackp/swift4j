@@ -52,6 +52,18 @@ final class SerializedNativeAgreementTests: XCTestCase {
   /// `Row` as a bare name and agree to register a borrow native for it; only
   /// the CLI knows the peer has no `Borrowed` view, so it declares the native
   /// and suppresses the public wrapper.
+  /// Not reconstructible: `raw` is `@nonjvm` and not Optional, so the macro
+  /// emits no `fromJavaObject` and an instance method has nothing to rebuild a
+  /// receiver from. Both sides must therefore still drop `describeRaw`.
+  @jvm(serialized: true)
+  public struct Sealed {
+    @nonjvm public var raw: UInt64
+    public var text: String { String(raw) }
+    @nonjvm public init(raw: UInt64) { self.raw = raw }
+    public func describeRaw() -> String { text }
+    public static func kind() -> String { "sealed" }
+  }
+
   @jvm
   public struct Holder {
     public var row: Row
@@ -182,11 +194,40 @@ final class SerializedNativeAgreementTests: XCTestCase {
 
     for gone in ["deinit", "copyImpl", "init0",
                  "getIdImpl", "getNameImpl", "getHandleImpl", "getFlagImpl",
-                 "unsafeWithHandleImpl", "touchImpl",
+                 "unsafeWithHandleImpl",
                  "equalsImpl", "hashCodeImpl"] {
       XCTAssertFalse(registered.contains(gone),
                      "\(gone) has no meaning on a peer with no address")
     }
+  }
+
+  /// An instance method is the one member that survives without a pointer: its
+  /// native takes none, JNI supplies the peer as the receiver, and the thunk
+  /// rebuilds the Swift value from the marshalled fields. `Row` is
+  /// reconstructible, so `touch` stays.
+  func testInstanceMethodsSurviveOnAReconstructiblePeer() throws {
+    let registered = try macroRegisteredNatives(forTypeNamed: "Row")
+    let declared = try javaDeclaredNatives(forTypeNamed: "Row")
+
+    XCTAssertTrue(registered.contains("touchImpl"),
+                  "a reconstructible serialized peer dispatches instance methods")
+    XCTAssertTrue(declared.contains("touchImpl"),
+                  "and the Java side must declare the same native")
+  }
+
+  /// The gate on the above. Without a reconstruction there is no receiver to
+  /// dispatch on, so the instance method goes and the static stays — and, more
+  /// importantly, both sides make that call identically.
+  func testInstanceMethodsStayDroppedOnANonReconstructiblePeer() throws {
+    let registered = try macroRegisteredNatives(forTypeNamed: "Sealed")
+    let declared = try javaDeclaredNatives(forTypeNamed: "Sealed")
+
+    XCTAssertFalse(registered.contains("describeRawImpl"),
+                   "nothing can rebuild the receiver, so the method cannot be bridged")
+    XCTAssertTrue(registered.contains("kindImpl"), "a static is unaffected")
+    XCTAssertEqual(registered, declared,
+                   "registered-but-not-declared: \(registered.subtracting(declared)); "
+                   + "declared-but-not-registered: \(declared.subtracting(registered))")
   }
 
   /// A static has no receiver to have been marshalled, so it keeps its native

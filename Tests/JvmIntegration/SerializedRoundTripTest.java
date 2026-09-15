@@ -82,6 +82,25 @@ public final class SerializedRoundTripTest {
               SerializedBridge.makeRow().hashCode(),
               SerializedBridge.makeRow().hashCode());
 
+        // ---- instance methods on a peer with no pointer ----
+        // The native takes no address. JNI hands the peer over as the receiver
+        // and the thunk rebuilds the Swift value from the marshalled fields, so
+        // this is the only proof that the reconstruction recurses correctly
+        // through a nested serialized member *and* a nested handle member on
+        // the dispatch path, not just through an explicit static.
+        SerializedRow fresh = SerializedBridge.makeRow();
+        check("instance method dispatches without a pointer",
+              fresh.summarize(), "42:hello:leaf:inner");
+        check("instance method takes parameters",
+              fresh.scaled(4.0), 10.0);
+
+        // The receiver is rebuilt per call, so a Java-side write is visible to
+        // the very next dispatch — the edit-buffer shape, reached through an
+        // instance method instead of being passed to a static.
+        fresh.setName("edited");
+        check("a Java-side write reaches the rebuilt receiver",
+              fresh.summarize(), "42:edited:leaf:inner");
+
         // ---- the escape hatch: a type whose storage is not marshalled ----
         // Opaque's only storage is @nonjvm, so the macro generates no
         // reconstruction and the author supplies one. Round-tripping proves

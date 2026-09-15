@@ -40,26 +40,43 @@ extension FunctionDeclSyntax {
     }
   }
 
-  func jniSignature() throws -> String {
-    let params = try (isStatic ? [] : ["J"]) + signature.jniSignatures()
+  /// `serializedReceiver` marks an instance method on a serialized peer, whose
+  /// native takes no `long ptr` — JNI already hands it the peer as the
+  /// receiver, and the thunk rebuilds the Swift value from that.
+  func jniSignature(serializedReceiver: Bool = false) throws -> String {
+    let params = try (isStatic || serializedReceiver ? [] : ["J"]) + signature.jniSignatures()
     let returnSig = isAsync ? "Ljava/util/concurrent/CompletableFuture;" : try signature.returnClause?.type.jniSignature() ?? "V"
     return "(\(params.joined()))\(returnSig)"
   }
 
   func makeBridgingDecls(typeDecl: any JvmTypeDeclSyntax, num: Int? = nil) throws -> String {
+    // An instance method on a serialized peer reconstructs its receiver from
+    // the peer's fields. A `mutating` one would mutate that temporary and
+    // discard it, leaving the Java object silently unchanged, so it is refused
+    // rather than bridged.
+    let serializedReceiver = typeDecl.serializedDispatchesInstanceMethods && !isStatic
+    if serializedReceiver && isMutating {
+      throw JvmMacrosError.message(
+        "`mutating func \(name.text)` cannot be bridged on `@jvm(serialized:)` type "
+        + "`\(typeDecl.typeName)`: the receiver is rebuilt from the Java peer's fields, "
+        + "so the mutation would be discarded. Mark it `@nonjvm`, or return a new value.")
+    }
+
     let paramTypes = try
       ["UnsafeMutablePointer<JNIEnv>"]
-        + (isStatic ? ["JavaClass?"] : ["JavaObject?", "JavaLong"])
+        + (isStatic ? ["JavaClass?"] : serializedReceiver ? ["JavaObject?"] : ["JavaObject?", "JavaLong"])
         + signature.jniTypes()
 
     let returnType = isAsync ? "JavaObject" : try signature.returnClause?.type.jniType() ?? "Void"
 
-    let closureParams = try ["_", "_"]
-        + (isStatic ? [] : ["ptr"])
+    let closureParams = try ["_", serializedReceiver ? "recv" : "_"]
+        + (isStatic || serializedReceiver ? [] : ["ptr"])
         + signature.jniParams()
 
     let _self = isStatic
       ? "\(typeDecl.typeName).self"
+      : serializedReceiver
+      ? "\(typeDecl.typeName).fromJavaObject(recv)"
       : typeDecl.selfExpr
 
     var name = bridgeName

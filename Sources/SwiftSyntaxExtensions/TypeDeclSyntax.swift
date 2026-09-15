@@ -50,6 +50,52 @@ public extension TypeDeclSyntax {
     return false
   }
 
+  /// Whether a Java value of this type carries enough to rebuild the Swift one.
+  ///
+  /// False when the type has a stored property that is neither marshalled nor
+  /// recoverable without one — a `@nonjvm` one, typically. `LcUUID` is the case
+  /// that matters: its only storage is `@nonjvm uuid: uuid_t`, so a generated
+  /// reconstruction would quietly produce a zero UUID, which is a
+  /// *valid-looking identifier for the wrong row*. Better to emit nothing and
+  /// let the conformance fail to compile, which tells the author exactly where
+  /// to write it by hand.
+  ///
+  /// An unmarshalled property is recoverable only when it is `Optional`, which
+  /// rebuilds as `nil`. A default value is explicitly *not* enough: a default
+  /// is precisely how a zero UUID would be forged.
+  ///
+  /// Lives here rather than in the macro because the CLI needs the same answer:
+  /// it decides whether a serialized peer declares instance methods, and the
+  /// macro decides whether to register their natives. A disagreement fails the
+  /// whole `RegisterNatives` batch at class-init.
+  var isSerializedReconstructible: Bool {
+    for member in memberBlock.members {
+      guard let decl = member.decl.as(VariableDeclSyntax.self),
+            !decl.isStatic else { continue }
+      // A declaration with no type annotation is invisible to `decls`, so it
+      // could not be assigned even if it were exported.
+      let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
+      guard !storedBindings.isEmpty else { continue }
+      if !decl.isExported {
+        let recoverable = storedBindings.allSatisfy {
+          $0.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
+            && $0.initializer == nil
+        }
+        if !recoverable { return false }
+        continue
+      }
+      if decl.decls.count != storedBindings.count { return false }
+    }
+    return true
+  }
+
+  /// A serialized peer can carry instance methods only when it can be rebuilt:
+  /// the thunk reconstructs the receiver from the peer's fields before
+  /// dispatching. Non-reconstructible types keep dropping them.
+  var serializedDispatchesInstanceMethods: Bool {
+    isSerialized && isSerializedReconstructible
+  }
+
   var parents: [any TypeDeclSyntax] {
     var parents: [any TypeDeclSyntax] = []
     var cur: any TypeDeclSyntax = self

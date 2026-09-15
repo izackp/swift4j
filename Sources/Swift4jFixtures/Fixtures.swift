@@ -296,6 +296,19 @@ public struct SerializedRow {
   }
 
   public static func describe() -> String { "row" }
+
+  /// Instance methods on a serialized peer. The native takes no pointer; JNI
+  /// passes the peer as the receiver and the thunk rebuilds this value from the
+  /// marshalled fields, so `self` here is a copy reconstructed per call. Reads
+  /// a nested serialized member and a nested *handle* member to prove the
+  /// reconstruction recurses through both.
+  public func summarize() -> String {
+    "\(id):\(name ?? "-"):\(handleLeaf.label):\(serializedLeaf.label)"
+  }
+
+  public func scaled(by factor: Double) -> Double {
+    serializedLeaf.weight * factor
+  }
 }
 
 /// Entry points for the JVM round-trip test. Compiling the fixtures proves the

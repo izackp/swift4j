@@ -10,10 +10,14 @@ class MethodGenerator {
   private let funcDecl: FunctionDeclSyntax
 
   /// A serialized peer keeps statics (they have no receiver to have been
-  /// marshalled) and drops instance methods (there is no pointer to dispatch
-  /// on). The macro reads the same distinction, so the registered native set
-  /// stays in agreement.
+  /// marshalled). Instance methods survive too when the type is
+  /// reconstructible: the native takes no pointer, JNI passes the peer as the
+  /// receiver, and the thunk rebuilds the Swift value from its fields. The
+  /// macro reads the same distinction, so the registered native set stays in
+  /// agreement.
   var isStatic: Bool { funcDecl.isStatic }
+
+  var isMutating: Bool { funcDecl.isMutating }
   private let className: String
 
   var name: String { funcDecl.name.text }
@@ -24,10 +28,6 @@ class MethodGenerator {
   /// Whether Swift declares this `mutating`. Non-mutating methods are left
   /// unmarked deliberately: calling one on a temporary is harmless, and marking
   /// them would flag it.
-  private var isMutating: Bool {
-    funcDecl.modifiers.contains { $0.name.tokenKind == .keyword(.mutating) }
-  }
-
   private var takesClosure: Bool {
     funcDecl.signature.parameterClause.parameters.contains { param in
       var type = param.type
@@ -67,7 +67,8 @@ class MethodGenerator {
 """
   }
 
-  func generate(with ctx: inout Context, sealed: Bool = false, cacheable: Bool = false) -> String {
+  func generate(with ctx: inout Context, sealed: Bool = false, cacheable: Bool = false,
+                serializedReceiver: Bool = false) -> String {
     let params = funcDecl.signature.paramsMapping(with: &ctx)
 
     // Async funcs return CompletableFuture<T>. Java generics cannot use
@@ -83,21 +84,27 @@ class MethodGenerator {
       retType = funcDecl.signature.returnClause?.type.map(with: &ctx) ?? "void"
     }
 
-    let callParams = (funcDecl.isStatic ? [] : ["_ptr()"]) + params.map{$0.name}
+    // A serialized peer has no address to pass: JNI supplies the receiver
+    // itself, so the native is an ordinary instance native taking only the
+    // declared parameters.
+    let passesPtr = !funcDecl.isStatic && !serializedReceiver
+    let callParams = (passesPtr ? ["_ptr()"] : []) + params.map{$0.name}
 
     var call = (funcDecl.isStatic ? className : "this") +  ".\(name)Impl(\(callParams.joined(separator: ", ")))"
     call = funcDecl.isAsync || funcDecl.signature.returnClause != nil ? "return \(call)" : call
 
     let paramDecls = params.map {"\($0.type) \($0.name)"}
-    let paramDeclsImpl = (funcDecl.isStatic ? [] : ["long ptr"]) + paramDecls
+    let paramDeclsImpl = (passesPtr ? ["long ptr"] : []) + paramDecls
 
     let modifiers = funcDecl.isStatic ? "static" : ""
 
     let throwsClause = funcDecl.isThrowing ? " throws Exception" : ""
 
 
+    // Nothing to lock on a serialized peer: the lock exists to keep a pointer
+    // alive across the call, and there is no pointer.
     let guarded = PeerLock.guarded("\(call);",
-                                   locked: !funcDecl.isStatic && !takesClosure,
+                                   locked: passesPtr && !takesClosure,
                                    sealed: sealed,
                                    owner: "\(className).\(name)")
 
@@ -105,7 +112,7 @@ class MethodGenerator {
     // does. Detaching unconditionally is the conservative choice: a cache that
     // survived a mutating call would report the write back on the next read
     // while Swift never saw it.
-    let detach = cacheable && !funcDecl.isStatic ? "    _detachCache();\n" : ""
+    let detach = cacheable && passesPtr ? "    _detachCache();\n" : ""
 
     let mutatingMark = isMutating ? "  @io.scade.swift4j.SwiftMutating\n" : ""
 

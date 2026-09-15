@@ -87,14 +87,22 @@ extension ClassGenerator: TypeGeneratorProtocol {
   /// not learn that the object stopped being a handle.
   ///
   /// What survives is statics. A static has no receiver to have been
-  /// marshalled, so it stays native-backed exactly as before. Instance methods
-  /// do not survive: there is no pointer to dispatch on, and the macro drops
-  /// their natives from the same `isSerialized` check, so the registered set
-  /// stays in agreement.
+  /// marshalled, so it stays native-backed exactly as before.
+  ///
+  /// Instance *methods* survive when the type is reconstructible: their native
+  /// takes no pointer, JNI hands the peer over as the receiver, and the Swift
+  /// thunk rebuilds the value from its fields before dispatching. A
+  /// non-reconstructible type cannot do that, so it keeps dropping them — and
+  /// `mutating` ones are dropped either way, since the mutation would land on
+  /// the rebuilt temporary. The macro reads the same two predicates, so the
+  /// registered native set stays in agreement.
   private func generateSerialized(with ctx: inout Context) -> TypeProxy {
     let instanceVars = varGens.filter { !$0.isStatic }
     let staticVars = varGens.filter { $0.isStatic }
     let staticMethods = methodGens.filter { $0.isStatic }
+    let instanceMethods = typeDecl.serializedDispatchesInstanceMethods
+      ? methodGens.filter { !$0.isStatic && !$0.isMutating }
+      : []
 
     let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx) }
       .filter { !$0.isEmpty }
@@ -119,7 +127,8 @@ extension ClassGenerator: TypeGeneratorProtocol {
       .joined(separator: "\n\n")
 
     let staticMembers = (staticVars.map { $0.generate(with: &ctx) }
-                         + staticMethods.map { $0.generate(with: &ctx) })
+                         + staticMethods.map { $0.generate(with: &ctx) }
+                         + instanceMethods.map { $0.generate(with: &ctx, serializedReceiver: true) })
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
 

@@ -285,11 +285,12 @@ public nonisolated static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer
     return exportedDecls.funcDecls
       .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
       .enumerated()
-      // A serialized peer has no pointer for an instance method to dispatch
-      // on, so only statics get a thunk. Filtered *after* enumerating so the
-      // surviving indices match the names `expandCreateNativeMethods`
-      // registers.
-      .filter { !isSerialized || $0.element.isStatic }
+      // A serialized peer has no pointer, so an instance method dispatches on a
+      // receiver rebuilt from the peer's fields — possible only when the type
+      // is reconstructible. Where it is not, statics alone get a thunk.
+      // Filtered *after* enumerating so the surviving indices match the names
+      // `expandCreateNativeMethods` registers.
+      .filter { !isSerialized || serializedDispatchesInstanceMethods || $0.element.isStatic }
       .compactMap { i, decl in
         return context.executeAndWarnIfFails(at: decl) {
           return try decl.makeBridgingDecls(typeDecl: self, num: i)
@@ -346,39 +347,6 @@ extension JvmTypeDeclSyntax {
       .compactMap { $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text }
   }
 
-  /// Whether a Java value of this type carries enough to rebuild the Swift one.
-  ///
-  /// False when the type has a stored property that is neither marshalled nor
-  /// recoverable without one — a `@nonjvm` one, typically. `LcUUID` is the case
-  /// that matters: its only storage is `@nonjvm uuid: uuid_t`, so a generated
-  /// reconstruction would quietly produce a zero UUID, which is a
-  /// *valid-looking identifier for the wrong row*. Better to emit nothing and
-  /// let the conformance fail to compile, which tells the author exactly where
-  /// to write it by hand.
-  ///
-  /// An unmarshalled property is recoverable only when it is `Optional`, which
-  /// rebuilds as `nil`. A default value is explicitly *not* enough: a default
-  /// is precisely how a zero UUID would be forged.
-  var isSerializedReconstructible: Bool {
-    for member in memberBlock.members {
-      guard let decl = member.decl.as(VariableDeclSyntax.self),
-            !decl.isStatic else { continue }
-      // A declaration with no type annotation is invisible to `decls`, so it
-      // could not be assigned even if it were exported.
-      let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
-      guard !storedBindings.isEmpty else { continue }
-      if !decl.isExported {
-        let recoverable = storedBindings.allSatisfy {
-          $0.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
-            && $0.initializer == nil
-        }
-        if !recoverable { return false }
-        continue
-      }
-      if decl.decls.count != storedBindings.count { return false }
-    }
-    return true
-  }
 
   func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax], namespacePath: [String] = []) throws -> [String] {
     // Swift-side dispatch target: `(namespace+)?(parents+)?self.<member>`.
@@ -411,9 +379,10 @@ extension JvmTypeDeclSyntax {
       let staticFuncNatives: [String] = exportedDecls.funcDecls
         .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
         .enumerated()
-        .filter { $0.element.isStatic }
+        .filter { serializedDispatchesInstanceMethods || $0.element.isStatic }
+        .filter { $0.element.isStatic || !$0.element.isMutating }
         .compactMap { (index, decl) in
-          guard let jniSig = try? decl.jniSignature() else { return nil }
+          guard let jniSig = try? decl.jniSignature(serializedReceiver: !decl.isStatic) else { return nil }
           let bridge = decl.bridgeName
           return expandCreateNativeMethod(name: "\(bridge)Impl", sig: jniSig, fn: "\(fqn).\(bridge)_\(index)_jni")
         }
