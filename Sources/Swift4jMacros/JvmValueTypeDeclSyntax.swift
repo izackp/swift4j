@@ -82,8 +82,6 @@ public func toJavaObject() -> JavaObject? {
         }
         return "  self.\(prop.name) = _jvmSource.callObjectMethod(method: \(getter), [])"
           + ".map { \(wrapped.trimmedDescription).fromJavaObject($0) }"
-      } + serializedNilRestoredProperties.map {
-        "  self.\($0) = nil"
       }).joined(separator: "\n")
 
       return

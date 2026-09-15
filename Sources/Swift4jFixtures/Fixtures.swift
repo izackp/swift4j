@@ -255,21 +255,6 @@ public struct SerializedLeaf {
   }
 }
 
-/// Unmarshalled storage a reconstruction can still recover: `blob` is
-/// `@nonjvm` and `Optional`, so it never crosses and rebuilds as `nil`. Absence
-/// is the one value that cannot be mistaken for a real one, so the type stays
-/// reconstructible. This is the `LocalImage.thumbnail` shape.
-@jvm(serialized: true)
-public struct SerializedPartial {
-  public var label: String
-  @nonjvm public var blob: Data?
-
-  public init(label: String, blob: Data? = nil) {
-    self.label = label
-    self.blob = blob
-  }
-}
-
 /// Optional primitives. `Optional` conforms to `JParameterConvertible` only
 /// where `Wrapped: JObjectConvertible`, so these have no `toJavaParameter()`
 /// witness and must be boxed on the way out. This is the

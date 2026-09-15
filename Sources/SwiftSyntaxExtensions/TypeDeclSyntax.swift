@@ -60,9 +60,12 @@ public extension TypeDeclSyntax {
   /// let the conformance fail to compile, which tells the author exactly where
   /// to write it by hand.
   ///
-  /// An unmarshalled property is recoverable only when it is `Optional`, which
-  /// rebuilds as `nil`. A default value is explicitly *not* enough: a default
-  /// is precisely how a zero UUID would be forged.
+  /// There is no partial credit. An unmarshalled property used to count as
+  /// recoverable when it was `Optional`, on the reasoning that rebuilding it as
+  /// `nil` costs a reader nothing — but that is a claim about every downstream
+  /// reader, which is not knowable from here. It made `Swift -> JVM -> Swift`
+  /// return a value that differed from the one that went in, silently, in the
+  /// one place nobody would look.
   ///
   /// Lives here rather than in the macro because the CLI needs the same answer:
   /// it decides whether a serialized peer declares instance methods, and the
@@ -76,14 +79,7 @@ public extension TypeDeclSyntax {
       // could not be assigned even if it were exported.
       let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
       guard !storedBindings.isEmpty else { continue }
-      if !decl.isExported {
-        let recoverable = storedBindings.allSatisfy {
-          $0.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
-            && $0.initializer == nil
-        }
-        if !recoverable { return false }
-        continue
-      }
+      guard decl.isExported else { return false }
       if decl.decls.count != storedBindings.count { return false }
     }
     return true

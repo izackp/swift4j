@@ -109,11 +109,15 @@ final class SerializedReconstructionTests: XCTestCase {
                   "a let is assignable once, in an init")
   }
 
-  func testHiddenOptionalStorageIsReconstructibleAsNil() throws {
+  /// Used to be reconstructible, rebuilding `blob` as `nil`. That made
+  /// `Swift -> JVM -> Swift` hand back a value the Java side never carried,
+  /// which is the losslessness invariant broken in the one place a reader
+  /// would not look. Absence is not a free answer: only the property's own
+  /// author knows whether `nil` is the value that went in.
+  func testHiddenOptionalStorageBlocksReconstruction() throws {
     let decl = try XCTUnwrap(structs()["HiddenOptionalStorage"])
-    XCTAssertTrue(decl.isSerializedReconstructible,
-                  "absence is the one value a reconstruction cannot get wrong")
-    XCTAssertEqual(decl.serializedNilRestoredProperties, ["blob"])
+    XCTAssertFalse(decl.isSerializedReconstructible,
+                   "an unmarshalled Optional is still unmarshalled")
     XCTAssertEqual(decl.serializedStoredProperties.map { $0.name }, ["id"],
                    "the opted-out property still does not cross")
   }
@@ -122,14 +126,12 @@ final class SerializedReconstructionTests: XCTestCase {
     let decl = try XCTUnwrap(structs()["HiddenDefaultedStorage"])
     XCTAssertFalse(decl.isSerializedReconstructible,
                    "a default forges a value the Java side never carried")
-    XCTAssertEqual(decl.serializedNilRestoredProperties, [])
   }
 
   func testHiddenDefaultedOptionalStorageBlocksReconstruction() throws {
     let decl = try XCTUnwrap(structs()["HiddenDefaultedOptionalStorage"])
     XCTAssertFalse(decl.isSerializedReconstructible,
                    "an Optional with a default is defaulted storage, not absent")
-    XCTAssertEqual(decl.serializedNilRestoredProperties, [])
   }
 
   /// Computed properties are marshalled outbound and skipped inbound: there is

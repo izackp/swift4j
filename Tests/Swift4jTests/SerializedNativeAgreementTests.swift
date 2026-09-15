@@ -52,9 +52,9 @@ final class SerializedNativeAgreementTests: XCTestCase {
   /// `Row` as a bare name and agree to register a borrow native for it; only
   /// the CLI knows the peer has no `Borrowed` view, so it declares the native
   /// and suppresses the public wrapper.
-  /// Reconstructible, but not mutable: `blob` is `@nonjvm` and Optional, which
-  /// rebuilds as nil for a *read* and has no field to copy a *write* back to.
-  /// Non-mutating methods bridge; `mutating` ones must not.
+  /// Not reconstructible: `blob` is `@nonjvm`, so the Java value does not carry
+  /// it and no rebuild can produce it. Every instance method is refused, not
+  /// just the `mutating` one.
   @jvm(serialized: true)
   public struct PartlyMarshalled {
     public var label: String
@@ -258,16 +258,22 @@ final class SerializedNativeAgreementTests: XCTestCase {
                    + "declared-but-not-registered: \(declared.subtracting(registered))")
   }
 
-  /// A `mutating` method bridges only where the write can be copied back, so
-  /// the two gates are asserted separately: an unmarshalled stored property
-  /// (nothing to write to) and a `let` (no setter to write through). In both
-  /// cases the read-only methods must be unaffected.
+  /// Two separate gates, asserted separately.
+  ///
+  /// An unmarshalled stored property blocks *every* instance method, read or
+  /// write: the thunk rebuilds the receiver from the peer's fields, and a field
+  /// that never crossed cannot be rebuilt from. It used to rebuild as `nil`
+  /// when it was `Optional`, which let reads through at the cost of handing
+  /// them a receiver that differed from the value marshalled out.
+  ///
+  /// A `let` is narrower — the value crosses intact, so reads are fine; only
+  /// the write has no setter to go back through.
   func testMutatingIsRefusedWhereTheWriteCannotBeCopiedBack() throws {
     let partial = try macroRegisteredNatives(forTypeNamed: "PartlyMarshalled")
-    XCTAssertTrue(partial.contains("describeImpl"),
-                  "a read still bridges: the unmarshalled Optional rebuilds as nil")
+    XCTAssertFalse(partial.contains("describeImpl"),
+                   "the receiver cannot be rebuilt, so even a read is refused")
     XCTAssertFalse(partial.contains("wipeImpl"),
-                   "but a write to it has no field to land in")
+                   "and a write to it has no field to land in")
     XCTAssertEqual(partial, try javaDeclaredNatives(forTypeNamed: "PartlyMarshalled"))
 
     let frozen = try macroRegisteredNatives(forTypeNamed: "Frozen")

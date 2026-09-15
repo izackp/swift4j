@@ -396,23 +396,6 @@ extension JvmTypeDeclSyntax {
     }.joined(separator: "\n")
   }
 
-  /// Unmarshalled stored properties a reconstruction must assign itself.
-  ///
-  /// An unexported `Optional` with no default has no value to carry across and
-  /// no default to fall back on, so a reconstruction sets it to `nil`. That is
-  /// lossy by construction: the Java value never held it. Only sound where the
-  /// property is genuinely derived or unused on the JVM side.
-  var serializedNilRestoredProperties: [String] {
-    memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) }
-      .filter { !$0.isStatic && !$0.isExported }
-      .flatMap(\.bindings)
-      .filter { binding in
-        binding.accessorBlock == nil
-          && binding.initializer == nil
-          && binding.typeAnnotation?.type.is(OptionalTypeSyntax.self) == true
-      }
-      .compactMap { $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text }
-  }
 
 
   func expandCreateNativeMethodsDefault(parents: [any TypeDeclSyntax], namespacePath: [String] = []) throws -> [String] {
