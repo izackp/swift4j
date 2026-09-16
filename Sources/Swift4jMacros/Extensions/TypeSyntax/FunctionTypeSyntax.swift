@@ -127,8 +127,8 @@ extension FunctionTypeSyntax: JvmMappedTypeSyntax {
     // non-void result is already a Swift value by then.
     return
 """
-jni.PushLocalFrame(\(max(parameters.count, 1) + 4))
-  defer { jni.PopLocalFrame() }
+let __jvmFramePushed = jni.PushLocalFrame(\(max(parameters.count, 1) + 4)) >= 0
+  defer { if __jvmFramePushed { jni.PopLocalFrame() } }
   \(stmts.joined(separator: "\n  "))
 \(call)
 """
