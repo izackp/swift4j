@@ -132,7 +132,20 @@ public final class SwiftPtr {
    * population cannot drift upward without bound.
    */
   public static void setLiveCeiling(int handles) {
-    Reaper.LIVE_CEILING = Math.max(Reaper.MIN_STEP, handles);
+    Reaper.LIVE_CEILING = Math.max(1, handles);
+  }
+
+  /**
+   * Raises the number of reclamation threads. One by default, because
+   * reclamation runs the Swift object's {@code deinit} and a {@code deinit}
+   * touching shared state would otherwise race with itself. Raise this only
+   * where every {@code deinit} on a {@code @jvm class} is thread-safe.
+   *
+   * Threads are only ever added, so a lower value than the number already
+   * running does nothing.
+   */
+  public static void setReaperThreads(int threads) {
+    Reaper.startReapers(Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), threads)));
   }
 
   /**
@@ -319,12 +332,42 @@ public final class SwiftPtr {
      * native, and the generated peer's property cache is per-instance Java
      * state that reclamation never touches.
      *
-     * Half the cores, capped at four: a reaper runs above normal priority, so
-     * taking every core would trade a native-memory stall for a UI stall. Eight
-     * threads measured slower than four on an eight-core host anyway.
+     * One by default, and opt-in beyond that. {@code cleanup.free()} runs the
+     * Swift object's {@code deinit}, which is consumer code: at more than one
+     * reaper a {@code deinit} touching shared state races with itself, and
+     * nothing in the compiler or this API would tell whoever writes the next one.
+     * A consumer that knows its deinits are thread-safe raises it through
+     * {@link SwiftPtr#setReaperThreads(int)}.
+     *
+     * Not serialised with a lock instead: {@code cleanup.free()} is the per-item
+     * work of the reap loop, so a lock around it makes several reapers behave as
+     * one while still paying for several.
      */
-    private static final int REAPER_THREADS =
-      Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+    private static final int DEFAULT_REAPER_THREADS = 1;
+
+    /** Reapers started so far. Threads are only ever added. */
+    private static final AtomicInteger REAPERS_STARTED = new AtomicInteger(0);
+
+    /**
+     * Starts reapers until at least {@code count} are running. Safe to call at
+     * any point: a reaper blocks on the reference queue, so an extra one costs
+     * a parked thread until there is work.
+     */
+    static void startReapers(int count) {
+      while (true) {
+        int current = REAPERS_STARTED.get();
+        if (current >= count) {
+          return;
+        }
+        if (!REAPERS_STARTED.compareAndSet(current, current + 1)) {
+          continue;
+        }
+        Thread reaper = new Thread(Reaper::reap, "SwiftPtr-Reaper-" + current);
+        reaper.setDaemon(true);
+        reaper.setPriority(Thread.NORM_PRIORITY + 1);
+        reaper.start();
+      }
+    }
 
     /**
      * Dequeue in batches: one blocking {@code remove()} followed by
@@ -385,12 +428,7 @@ public final class SwiftPtr {
     }
 
     static {
-      for (int i = 0; i < REAPER_THREADS; i++) {
-        Thread reaper = new Thread(Reaper::reap, "SwiftPtr-Reaper-" + i);
-        reaper.setDaemon(true);
-        reaper.setPriority(Thread.NORM_PRIORITY + 1);
-        reaper.start();
-      }
+      startReapers(DEFAULT_REAPER_THREADS);
 
       Thread pressure = new Thread(() -> {
         long lastGcNs = System.nanoTime() - MIN_GC_INTERVAL_NS;
