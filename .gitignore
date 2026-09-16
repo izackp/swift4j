@@ -70,3 +70,5 @@ fastlane/test_output
 
 # swift4j test fixtures generated output
 test-fixtures/out-*/
+
+.vscode/

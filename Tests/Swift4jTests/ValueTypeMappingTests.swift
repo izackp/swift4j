@@ -59,10 +59,19 @@ final class ValueTypeMappingTests: XCTestCase {
     return ""
   }
 
-  func testMappedTypeIsNamedAndImportedAsTheJavaValue() throws {
-    let row = try generate(valueTypes: ["LcUUID": "java.util.UUID"])
+  /// Runs of whitespace collapse to one space before matching, so an assertion
+  /// pins the declaration's structure rather than the double space an empty
+  /// modifier interpolation happens to leave behind.
+  private func generateNormalized(valueTypes: [String: String]) throws -> String {
+    try generate(valueTypes: valueTypes)
+      .split(separator: " ", omittingEmptySubsequences: true)
+      .joined(separator: " ")
+  }
 
-    XCTAssertTrue(row.contains("public  UUID getId()"),
+  func testMappedTypeIsNamedAndImportedAsTheJavaValue() throws {
+    let row = try generateNormalized(valueTypes: ["LcUUID": "java.util.UUID"])
+
+    XCTAssertTrue(row.contains("public UUID getId()"),
                   "a value-bridged property should be typed as the Java value")
     XCTAssertTrue(row.contains("import java.util.UUID;"),
                   "the qualified name must be imported, or the short name "
@@ -72,18 +81,18 @@ final class ValueTypeMappingTests: XCTestCase {
   }
 
   func testOptionalOfAMappedTypeIsAlsoBridged() throws {
-    let row = try generate(valueTypes: ["LcUUID": "java.util.UUID"])
+    let row = try generateNormalized(valueTypes: ["LcUUID": "java.util.UUID"])
 
-    XCTAssertTrue(row.contains("public  @Nullable UUID getParentId()"),
+    XCTAssertTrue(row.contains("public @Nullable UUID getParentId()"),
                   "an optional of a value-bridged type bridges the payload")
   }
 
   /// Without the flag the same fixture emits the bare Swift name — which is
   /// what makes this a real mapping rather than a coincidence of the fixture.
   func testUnmappedTypeStillEmitsTheBareSwiftName() throws {
-    let row = try generate(valueTypes: [:])
+    let row = try generateNormalized(valueTypes: [:])
 
-    XCTAssertTrue(row.contains("public  LcUUID getId()"),
+    XCTAssertTrue(row.contains("public LcUUID getId()"),
                   "an unmapped, unregistered type falls through to its bare name")
     XCTAssertFalse(row.contains("import java.util.UUID;"))
   }
@@ -91,9 +100,9 @@ final class ValueTypeMappingTests: XCTestCase {
   /// The flag is consulted only from `default:`, so shadowing a built-in is a
   /// no-op rather than a way to break every generated signature at once.
   func testBuiltInMappingsCannotBeOverridden() throws {
-    let row = try generate(valueTypes: ["String": "com.example.NotAString"])
+    let row = try generateNormalized(valueTypes: ["String": "com.example.NotAString"])
 
-    XCTAssertTrue(row.contains("public  String getLabel()"),
+    XCTAssertTrue(row.contains("public String getLabel()"),
                   "String is a built-in mapping and must win over --value-type")
     XCTAssertFalse(row.contains("com.example.NotAString"))
     XCTAssertFalse(row.contains("import com.example.NotAString;"))
@@ -104,7 +113,7 @@ final class ValueTypeMappingTests: XCTestCase {
   /// public wrapper because the registry cannot resolve the name to a @jvm
   /// struct. Both halves have to stay in agreement.
   func testMappedTypeDeclaresTheBorrowNativeButExposesNoScope() throws {
-    let row = try generate(valueTypes: ["LcUUID": "java.util.UUID"])
+    let row = try generateNormalized(valueTypes: ["LcUUID": "java.util.UUID"])
 
     XCTAssertTrue(row.contains("private native void unsafeWithIdImpl(long ptr,"),
                   "the macro registers this native, so the Java method must "

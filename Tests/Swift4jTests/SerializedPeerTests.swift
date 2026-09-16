@@ -95,8 +95,10 @@ final class SerializedPeerTests: XCTestCase {
                   "and the native takes no pointer, since there is no address")
   }
 
-  /// The refresh machinery is gone with the fields it existed for: nothing is
-  /// derived any more, so nothing can go stale and there is no `_setX`.
+  /// A computed property is dispatched rather than materialised as a field, so
+  /// it has no storage to refresh and gets no unchecked `_setFlag` writer. This
+  /// says nothing about a *stored* property that crosses as another type, which
+  /// does get a `_setX` for its checked setter to write through.
   func testNoDerivedFieldMachinerySurvives() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
@@ -174,9 +176,12 @@ final class SerializedPeerTests: XCTestCase {
   func testStaticsAndInstanceMethodsBothSurvive() throws {
     let snapshot = try XCTUnwrap(generate()["Snapshot"])
 
-    XCTAssertTrue(snapshot.contains("getVersion"), "a static property survives")
-    XCTAssertTrue(snapshot.contains("describe"), "a static method survives")
-    XCTAssertTrue(snapshot.contains("touch"), "an instance method survives")
+    XCTAssertTrue(snapshot.contains("public static String getVersion()"),
+                  "a static property survives")
+    XCTAssertTrue(snapshot.contains("public static String describe()"),
+                  "a static method survives")
+    XCTAssertTrue(snapshot.contains("void touch()"),
+                  "an instance method survives")
   }
 
   /// The shape of the surviving instance method: no `long ptr` anywhere, since
