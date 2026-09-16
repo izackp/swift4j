@@ -9,12 +9,6 @@ class MethodGenerator {
 
   private let funcDecl: FunctionDeclSyntax
 
-  /// A serialized peer keeps statics (they have no receiver to have been
-  /// marshalled). Instance methods survive too when the type is
-  /// reconstructible: the native takes no pointer, JNI passes the peer as the
-  /// receiver, and the thunk rebuilds the Swift value from its fields. The
-  /// macro reads the same distinction, so the registered native set stays in
-  /// agreement.
   var isStatic: Bool { funcDecl.isStatic }
 
   var isMutating: Bool { funcDecl.isMutating }
@@ -25,9 +19,6 @@ class MethodGenerator {
   /// A closure parameter means Java code runs inside the native call, where it
   /// can take JVM monitors and deadlock against a thread waiting on this
   /// peer's. Those methods stay unguarded; see `PeerLock`.
-  /// Whether Swift declares this `mutating`. Non-mutating methods are left
-  /// unmarked deliberately: calling one on a temporary is harmless, and marking
-  /// them would flag it.
   private var takesClosure: Bool {
     funcDecl.signature.parameterClause.parameters.contains { param in
       var type = param.type

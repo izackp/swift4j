@@ -35,8 +35,7 @@ public class JObject: @unchecked Sendable {
   /// `ptr` holds a `jweak` in weak mode, and a weak global may not be passed to
   /// JNI directly — it has to be promoted to a local ref, which also reports
   /// whether the object is still alive. The returned local belongs to the
-  /// current JNI frame; use ``withObject(_:)`` instead when the reference does
-  /// not escape, so it is released immediately rather than at frame exit.
+  /// current JNI frame and is the caller's to release.
   public func localRef() -> JavaObject? {
     guard weak else { return ptr }
     return jni.NewLocalRef(ptr)

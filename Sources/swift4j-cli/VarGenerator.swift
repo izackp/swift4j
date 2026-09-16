@@ -505,10 +505,9 @@ class VarGenerator {
   /// peer over as the receiver and the thunk rebuilds the Swift value from the
   /// marshalled fields before reading through.
   ///
-  /// Emitted only where the type is reconstructible, since there is no receiver
-  /// to rebuild otherwise. The macro reads the same predicate, so the
-  /// registered native set stays in agreement — `RegisterNatives` fails the
-  /// whole batch on a native the peer does not declare.
+  /// The macro reads the same predicate, so the registered native set stays in
+  /// agreement — `RegisterNatives` fails the whole batch on a native the peer
+  /// does not declare.
   func serializedComputedAccessors(with ctx: inout Context, dispatches: Bool) -> String {
     guard dispatches else { return "" }
     return serializedComputedDecls.map { decl in

@@ -89,13 +89,11 @@ extension ClassGenerator: TypeGeneratorProtocol {
   /// What survives is statics. A static has no receiver to have been
   /// marshalled, so it stays native-backed exactly as before.
   ///
-  /// Instance *methods* survive when the type is reconstructible: their native
-  /// takes no pointer, JNI hands the peer over as the receiver, and the Swift
-  /// thunk rebuilds the value from its fields before dispatching. A
-  /// non-reconstructible type cannot do that, so it keeps dropping them — and
-  /// `mutating` ones are dropped either way, since the mutation would land on
-  /// the rebuilt temporary. The macro reads the same two predicates, so the
-  /// registered native set stays in agreement.
+  /// Instance *methods* survive: their native takes no pointer, JNI hands the
+  /// peer over as the receiver, and the Swift thunk rebuilds the value from its
+  /// fields before dispatching. `mutating` ones are dropped unless the type
+  /// supports mutation, since the write has to be copied back. The macro reads
+  /// the same predicates, so the registered native set stays in agreement.
   private func generateSerialized(with ctx: inout Context) -> TypeProxy {
     let instanceVars = varGens.filter { !$0.isStatic }
     let staticVars = varGens.filter { $0.isStatic }

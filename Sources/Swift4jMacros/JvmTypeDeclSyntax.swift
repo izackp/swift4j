@@ -329,9 +329,6 @@ public nonisolated static func fromUnownedPointer(_ raw: UnsafeMutableRawPointer
     return exportedDecls.funcDecls
       .filter { $0.isBridgeable(typeConformsToHashable: conformsToHashable) }
       .enumerated()
-      // A serialized peer has no pointer, so an instance method dispatches on a
-      // receiver rebuilt from the peer's fields — possible only when the type
-      // is reconstructible. Where it is not, statics alone get a thunk.
       // Filtered *after* enumerating so the surviving indices match the names
       // `expandCreateNativeMethods` registers.
       .filter { !isSerialized || serializedDispatchesInstanceMethods || $0.element.isStatic }
@@ -389,12 +386,6 @@ extension JvmTypeDeclSyntax {
   }
 
   /// Body of `updateJavaObject`: writes `self` into an existing peer.
-  ///
-  /// Writes **every** marshalled property, not just the stored ones. A computed
-  /// property is marshalled as a field evaluated once, so leaving it alone
-  /// would let the peer keep reporting a derived value that the mutation has
-  /// invalidated — a row whose `id` is now negative still answering `flag ==
-  /// true`.
   ///
   /// A property whose value is itself updatable is recursed into rather than
   /// replaced, so a reference a caller already holds to that nested object
@@ -459,9 +450,6 @@ extension JvmTypeDeclSyntax {
     // declare, so this list and ClassGenerator's serialized template have to
     // agree exactly. Both key off the same `isSerialized`.
     if isSerialized {
-      // Statics, plus computed instance properties — which are functions, not
-      // storage, and so stay methods on the peer rather than becoming fields.
-      // Their thunks take no address; the receiver is rebuilt from the fields.
       // Statics; computed instance properties, which are functions and stay
       // methods on the peer; and stored properties that cross as another type,
       // whose setter validates through Swift instead of writing the field.

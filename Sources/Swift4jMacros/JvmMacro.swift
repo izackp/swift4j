@@ -33,10 +33,10 @@ public struct JvmMacro {
     return false
   }
 
-  /// Same reach-through for the mutation gate.
+  /// Same reach-through for the mutation gate. Structs only: the sole call site
+  /// tests `isStruct` first.
   static func supportsMutation(_ declaration: some DeclGroupSyntax) -> Bool {
     if let decl = declaration.as(StructDeclSyntax.self) { return decl.serializedSupportsMutation }
-    if let decl = declaration.as(EnumDeclSyntax.self) { return decl.serializedSupportsMutation }
     return false
   }
 
