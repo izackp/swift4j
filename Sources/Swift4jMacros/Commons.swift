@@ -58,6 +58,19 @@ extension MacroExpansionContext {
     return names.reversed()
   }
 
+  /// Names of the real types enclosing the declaration being expanded, ordered
+  /// outermost-first. These become `$`-joined inner-class segments of the JNI
+  /// binary name.
+  ///
+  /// Read from `lexicalContext` rather than the declaration's `parents`: a
+  /// macro receives a detached syntax node, so walking its parent chain finds
+  /// nothing and a nested type resolved its binary name as if top-level.
+  var typeParentNames: [String] {
+    lexicalContext.compactMap {
+      ($0.asProtocol(DeclSyntaxProtocol.self) as? (any TypeDeclSyntax))?.typeName
+    }.reversed()
+  }
+
   func executeAndWarnIfFails<T>(at node: some SyntaxProtocol, _ f: () throws -> T) -> T? {
     do {
       return try f()

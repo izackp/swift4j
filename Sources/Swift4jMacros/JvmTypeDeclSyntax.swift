@@ -147,19 +147,32 @@ extension JvmTypeDeclSyntax {
     return chain.joined(separator: ".")
   }
 
-  func fqn(from context: some MacroExpansionContext) -> String {
-    let namespacePath = context.namespaceParentNames
-    // JNI binary name: package separated by `/`. Namespaced @jvm types live
-    // in a subpackage (`CaptureAPI/Server/Subject`), so namespaces join with
-    // `/` too. Real inner classes (via TypeDecl nesting) use `$` and are
-    // handled at the per-call-site fqn builders, not here.
-    var segments: [String] = []
-    if let moduleName = moduleName(from: context) {
-      segments.append(moduleName)
+  /// The JNI binary name. Package segments — the module, then the names of any
+  /// enclosing namespace extensions — join with `/`, because a namespaced `@jvm`
+  /// type lives in a subpackage (`CaptureAPI/Server/Subject`). Real type nesting
+  /// joins with `$`, because that is an inner class.
+  ///
+  /// Every site that names a class to JNI goes through here. Two builders that
+  /// disagreed is what made a type-nested `@jvm` type resolve `Pkg/Inner` in
+  /// `__JClass__` while `class_init` looked up `Pkg/Outer$Inner`.
+  func jniBinaryName(module: String?,
+                     parentNames: [String],
+                     namespacePath: [String]) -> String {
+    var pkgSegments: [String] = []
+    if let module {
+      pkgSegments.append(module)
     }
-    segments.append(contentsOf: namespacePath)
-    segments.append(typeName)
-    return segments.joined(separator: "/")
+    pkgSegments.append(contentsOf: namespacePath)
+
+    let innerClassChain = (parentNames + [typeName]).joined(separator: "$")
+    let pkgPart = pkgSegments.joined(separator: "/")
+    return pkgPart.isEmpty ? innerClassChain : "\(pkgPart)/\(innerClassChain)"
+  }
+
+  func fqn(from context: some MacroExpansionContext) -> String {
+    jniBinaryName(module: moduleName(from: context),
+                  parentNames: context.typeParentNames,
+                  namespacePath: context.namespaceParentNames)
   }
 
   func moduleName(from context: some MacroExpansionContext) -> String? {
@@ -530,39 +543,13 @@ extension JvmTypeDeclSyntax {
     let chainForVar = (namespacePath + parents.map { $0.typeName } + [typeName])
       .joined(separator: "_")
 
-    // Display name for the diagnostic. Built the same way as the FindClass
-    // binary name below so the two never disagree about which class is meant.
-    let displayName: String = {
-      var pkgSegments: [String] = []
-      if let moduleName = moduleName(from: context) {
-        pkgSegments.append(moduleName)
-      }
-      pkgSegments.append(contentsOf: namespacePath)
-      let innerClassChain = (parents.map { $0.typeName } + [typeName]).joined(separator: "$")
-      let pkgPart = pkgSegments.joined(separator: "/")
-      return pkgPart.isEmpty ? innerClassChain : "\(pkgPart)/\(innerClassChain)"
-    } ()
+    let displayName = jniBinaryName(module: moduleName(from: context),
+                                    parentNames: parents.map { $0.typeName },
+                                    namespacePath: namespacePath)
 
-    let cls_expr: String
-    if parents.isEmpty && namespacePath.isEmpty {
-      cls_expr = "cls"
-    } else {
-      // JNI FindClass binary name. Package segments (module + namespace
-      // extensions) join with `/`; real `parents` (genuine type-nested @jvm
-      // declarations) join with `$` for inner-class lookup.
-      var pkgSegments: [String] = []
-      if let moduleName = moduleName(from: context) {
-        pkgSegments.append(moduleName)
-      }
-      pkgSegments.append(contentsOf: namespacePath)
-      let pkgPart = pkgSegments.joined(separator: "/")
-
-      let innerClassChain = (parents.map { $0.typeName } + [typeName])
-        .joined(separator: "$")
-
-      let jfqn = pkgPart.isEmpty ? innerClassChain : "\(pkgPart)/\(innerClassChain)"
-      cls_expr = "jni.FindClass(\"\(jfqn)\")"
-    }
+    let cls_expr = (parents.isEmpty && namespacePath.isEmpty)
+      ? "cls"
+      : "jni.FindClass(\"\(displayName)\")"
 
     // A serialized type with no statics registers nothing, and a bare `[]` has
     // no inferrable element type. Keep the call rather than skipping it: the
