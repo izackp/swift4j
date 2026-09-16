@@ -347,6 +347,7 @@ public struct JNI {
 
   public func ExceptionCheck() -> Bool { env { $0.ExceptionCheck($1) } == JNI_TRUE }
   public func ExceptionClear() { env { $0.ExceptionClear($1) } }
+  public func ExceptionOccurred() -> JavaObject? { env { $0.ExceptionOccurred($1) } }
   public func ExceptionDescribe() { env { $0.ExceptionDescribe($1) } }
 
   public func Throw(_ ex: JavaThrowable) -> Bool { env { $0.Throw($1, ex) } == 0 }

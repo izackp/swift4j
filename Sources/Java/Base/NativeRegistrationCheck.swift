@@ -10,20 +10,22 @@ import CJNI
 /// to agree, and no compiler can see a disagreement — `RegisterNatives` binds
 /// by name and descriptor *string*, at runtime.
 ///
-/// The two directions fail differently, which is why they are reported
-/// differently:
+/// The two directions fail differently, and both are reported as warnings:
 ///
 /// - **Registered, not declared.** `RegisterNatives` rejects the whole batch,
 ///   so *every* native on the class is left unbound and the first call to any
 ///   of them throws `UnsatisfiedLinkError` — with a message naming a method
-///   that is very likely not the one that caused it. Fatal, and already fatal
-///   before this check existed; the check only supplies the name.
+///   that is very likely not the one that caused it. This check supplies the
+///   name.
 ///
 /// - **Declared, not registered.** The batch succeeds. That one method is
 ///   unbound and throws `UnsatisfiedLinkError` if it is ever called, which may
-///   be never. Reported as a warning rather than a trap, because it does not
-///   break a class that works today, and promoting it would turn dead
-///   generated code into a startup crash.
+///   be never.
+///
+/// Nothing here traps. The check runs per class load in release, and the
+/// mismatch it catches comes from consumer code changing rather than from
+/// swift4j changing, so an abort would turn a diagnosable Java-level failure
+/// into a native crash carrying no Java stack.
 public enum NativeRegistrationCheck {
 
   /// Whether to run the reflection cross-check when `RegisterNatives` reports
@@ -41,9 +43,8 @@ public enum NativeRegistrationCheck {
 
   /// Every warning raised so far, in the order the classes loaded.
   ///
-  /// `System.err` is where a human reads these; this is where a test does. The
-  /// fatal direction is deliberately absent — it traps, so there is nothing
-  /// left to inspect.
+  /// `System.err` is where a human reads these; this is where a test does.
+  /// Both directions are recorded.
   public nonisolated(unsafe) private(set) static var findings: [String] = []
 
   /// Called by the generated `<Type>_class_init` immediately after
@@ -53,11 +54,14 @@ public enum NativeRegistrationCheck {
                            registered: [JNINativeMethod2],
                            registerResult: JavaInt) {
     var didFail = registerResult != 0
-    if jni.ExceptionCheck() {
+    // The exception has to be cleared before the reflection below can run, so
+    // it is rendered first and carried into the warning. Describing and
+    // discarding it left the warning without the thing that explains it.
+    let pendingException = takePendingExceptionText()
+    if pendingException != nil {
       didFail = true
-      jni.ExceptionDescribe()
-      jni.ExceptionClear()
     }
+    let exceptionSuffix = pendingException.map { "Java exception: \($0)\n" } ?? ""
 
     guard didFail || isEnabled else { return }
 
@@ -85,10 +89,11 @@ public enum NativeRegistrationCheck {
         // Nothing in our list is missing from the peer, so the batch was
         // rejected for a reason this check does not model. Say so rather than
         // implying the lists agree and all is well.
-        fatalError("""
+        warn("""
           swift4j: RegisterNatives failed for \(className) (result \(registerResult)), \
           but every native it registered is declared by the peer with a matching \
-          descriptor. Check the JNI exception above.
+          descriptor.
+          \(exceptionSuffix)
           """)
       }
       return
@@ -109,7 +114,27 @@ public enum NativeRegistrationCheck {
         }
       }
     }
-    fatalError(message)
+    message += exceptionSuffix
+    warn(message)
+  }
+
+  /// Renders the pending Java exception, if any, and clears it.
+  static func takePendingExceptionText() -> String? {
+    guard jni.ExceptionCheck() else { return nil }
+
+    let throwable = jni.ExceptionOccurred()
+    jni.ExceptionClear()
+
+    guard let throwable else { return "(pending, could not be retrieved)" }
+    defer { jni.DeleteLocalRef(throwable) }
+
+    guard let throwableClass = jni.GetObjectClass(throwable),
+          let toString = jni.GetMethodID(throwableClass, "toString", "()Ljava/lang/String;"),
+          let text = jni.CallObjectMethod(throwable, toString, []) else {
+      return "(pending, could not be rendered)"
+    }
+    defer { jni.DeleteLocalRef(text) }
+    return String.fromJavaObject(text)
   }
 
   /// Every declared constructor, rendered the way Java prints it.
