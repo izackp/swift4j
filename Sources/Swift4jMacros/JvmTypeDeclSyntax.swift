@@ -181,7 +181,13 @@ extension JvmTypeDeclSyntax {
     // them would fatalError at class-init. What it does declare is the
     // all-fields constructor, which `toJavaObject` calls.
     if isSerialized {
-      let ctorSig = (try? serializedCtorSignature()) ?? "()V"
+      let ctorSig: String
+      do {
+        ctorSig = try serializedCtorSignature()
+      } catch {
+        context.addDiagnostics(from: error, node: self)
+        ctorSig = "()V"
+      }
 
       // One cached id per getter, resolved on first use. A string-keyed
       // GetMethodID per field per object would be paid thousands of times a
@@ -348,7 +354,14 @@ extension JvmTypeDeclSyntax {
 
   /// JNI descriptor for the all-fields constructor the CLI emits.
   func serializedCtorSignature() throws -> String {
-    let params = try serializedProperties.map { try $0.type.jniSignature() }
+    let params = try serializedProperties.map { prop -> String in
+      do {
+        return try prop.type.jniSignature()
+      } catch {
+        throw JvmMacrosError.message(
+          "\(typeName).\(prop.name): cannot build the serialized constructor descriptor — \(error)")
+      }
+    }
     return "(\(params.joined()))V"
   }
 
