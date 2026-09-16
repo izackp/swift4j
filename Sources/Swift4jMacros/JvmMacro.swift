@@ -68,6 +68,51 @@ public struct JvmMacro {
     }
   }
 
+  /// A stored binding with no type annotation is dropped by `decls`, so it
+  /// reaches neither the peer's field list, nor the constructor, nor
+  /// `updateJavaObject`. Where the author also hand-writes the conversions the
+  /// build stays green and the field is simply gone.
+  static func assertSerializedStoredPropertiesAreVisible(_ declaration: some DeclGroupSyntax) throws {
+    guard isSerialized(declaration) else { return }
+
+    for member in declaration.memberBlock.members {
+      guard let decl = member.decl.as(VariableDeclSyntax.self), !decl.isStatic else { continue }
+
+      let storedBindings = decl.bindings.filter { $0.accessorBlock == nil }
+      guard !storedBindings.isEmpty, decl.decls.count != storedBindings.count else { continue }
+
+      let unannotated = storedBindings
+        .filter { $0.typeAnnotation == nil }
+        .map { $0.pattern.trimmedDescription }
+
+      let subject = unannotated.isEmpty
+        ? "A stored property of '\(decl.bindings.trimmedDescription)'"
+        : "Stored propert\(unannotated.count == 1 ? "y" : "ies") \(unannotated.map { "'\($0)'" }.joined(separator: ", "))"
+
+      throw JvmMacrosError.message(
+        "\(subject) on a @jvm(serialized:) type has no type annotation, so it "
+        + "cannot be copied into the Java peer and would be silently absent from "
+        + "the peer's fields, its constructor and updateJavaObject. Write the "
+        + "type explicitly, e.g. `var count: Int = 0`.")
+    }
+  }
+
+  /// `hasDeclaredMarshalling` decides on the presence of an `as:` label;
+  /// `jvmMarshalling` additionally requires a simple metatype expression and
+  /// both conversions. Where they disagree the author's conversions are
+  /// discarded without a word.
+  static func assertDeclaredMarshallingIsUsable(_ declaration: some DeclGroupSyntax) throws {
+    for member in declaration.memberBlock.members {
+      guard let decl = member.decl.as(VariableDeclSyntax.self),
+            let reason = decl.jvmMarshallingDefect else { continue }
+
+      throw JvmMacrosError.message(
+        "@jvm(as:toJava:toSwift:) on '\(decl.bindings.trimmedDescription)' is "
+        + "declared but cannot be used: \(reason). The conversions would be "
+        + "discarded and the property would cross as its Swift type.")
+    }
+  }
+
   static func assert(context: some MacroExpansionContext) throws {
     if let enclosingDeclType = context.enclosingDeclType {
       if !enclosingDeclType.isExported {
@@ -115,6 +160,8 @@ extension JvmMacro: MemberMacro {
 
     try assert(context: context)
     try assertSerializedIsApplicable(declaration)
+    try assertDeclaredMarshallingIsUsable(declaration)
+    try assertSerializedStoredPropertiesAreVisible(declaration)
 
     return try typeDecl(from: declaration).expandMembers(in: context)
   }

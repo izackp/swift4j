@@ -113,6 +113,44 @@ extension VariableDeclSyntax: MemberDeclSyntax {
     return nil
   }
 
+  /// Why a declared `@jvm(as:toJava:toSwift:)` did not produce a
+  /// ``jvmMarshalling``, or `nil` when the two agree.
+  public var jvmMarshallingDefect: String? {
+    guard hasDeclaredMarshalling, jvmMarshalling == nil else { return nil }
+
+    for element in attributes.findAttributes("jvm") {
+      guard case .attribute(let attr) = element,
+            case .argumentList(let args)? = attr.arguments else { continue }
+
+      var asExpr: ExprSyntax?
+      var hasToJava = false
+      var hasToSwift = false
+      for arg in args {
+        switch arg.label?.text {
+        case "as": asExpr = arg.expression
+        case "toJava": hasToJava = true
+        case "toSwift": hasToSwift = true
+        default: break
+        }
+      }
+      guard let asExpr else { continue }
+
+      let named = asExpr.as(MemberAccessExprSyntax.self)?.base?.as(DeclReferenceExprSyntax.self) != nil
+      if !named {
+        return "`as: \(asExpr.trimmedDescription)` is not a plain metatype of a named type"
+          + " — write `as: String.self`, not a qualified, generic or bracketed form"
+      }
+
+      var missing: [String] = []
+      if !hasToJava { missing.append("toJava:") }
+      if !hasToSwift { missing.append("toSwift:") }
+      if !missing.isEmpty {
+        return "\(missing.joined(separator: " and ")) \(missing.count == 1 ? "is" : "are") missing"
+      }
+    }
+    return nil
+  }
+
   public var isAsync: Bool {
     ///TODO: implement for computed properties
     return false
