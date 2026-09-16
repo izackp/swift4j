@@ -35,7 +35,10 @@ extension StructDeclSyntax: JvmValueTypeDeclSyntax {
       }
       return
 """
-  return \(typeName).javaClass.create(ctor: __JClass__.ctor, [\(args.joined(separator: ", "))])
+  let __jvmFramePushed = jni.PushLocalFrame(\(max(args.count, 1) + 4)) >= 0
+  let __jvmPeer = \(typeName).javaClass.create(ctor: __JClass__.ctor, [\(args.joined(separator: ", "))])
+  guard __jvmFramePushed else { return __jvmPeer }
+  return jni.PopLocalFrame(__jvmPeer)
 """
     }
 

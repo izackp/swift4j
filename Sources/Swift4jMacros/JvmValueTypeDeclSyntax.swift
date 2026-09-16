@@ -103,6 +103,8 @@ public func toJavaObject() -> JavaObject? {
       return
 """
 public init(_jvmFrom _jvmSource: JObject) {
+  let __jvmFramePushed = jni.PushLocalFrame(\(max(serializedStoredProperties.count, 1) + 4)) >= 0
+  defer { if __jvmFramePushed { jni.PopLocalFrame() } }
 \(assignments)
 }
 
