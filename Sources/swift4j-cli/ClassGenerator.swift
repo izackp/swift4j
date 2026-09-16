@@ -445,8 +445,16 @@ public \(nested ? "static" : "") class \(name)\(extendsClause)\(implementsClause
     return _ptr.get();
   }
 
+  /**
+   * Native footprint of one boxed value, written by class_init. Left at zero
+   * where the macro has no meaningful number — a class handle boxes a
+   * reference, whose width says nothing about the instance behind it — and
+   * SwiftPtr then falls back to its nominal default.
+   */
+  private static long __nativeBytes;
+
   private static \(name) fromPtr(long ptr) {
-    return new \(name)(new SwiftPtr(ptr, \(name)::deinit));
+    return new \(name)(new SwiftPtr(ptr, \(name)::deinit, __nativeBytes));
   }
 
   private static native void deinit(long ptr);

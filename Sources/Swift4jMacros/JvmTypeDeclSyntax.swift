@@ -558,9 +558,31 @@ extension JvmTypeDeclSyntax {
       ? "[JNINativeMethod2]()"
       : "[\n    \(natives.joined(separator: ",\n"))\n  ]"
 
+    // The runtime cannot see how much native memory a handle stands for, so
+    // without this every handle reports a fabricated 512 bytes and a collection
+    // that would have freed native memory never happens. A pointer-backed value
+    // type's handle is `UnsafeMutablePointer<T>.allocate(capacity: 1)`, so its
+    // footprint is `MemoryLayout<T>.stride` — a real lower bound, not a
+    // guarantee: storage reached through a reference the value holds is not
+    // counted. A class handle boxes a reference and has no comparable number,
+    // so it is left alone.
+    //
+    // Written through the peer's field rather than passed to a native, so the
+    // registered native set is untouched.
+    let nativeBytes = (!isSerialized && self is any JvmValueTypeDeclSyntax && !(self is EnumDeclSyntax))
+      ? """
+        if let \(chainForVar)_sizeField = jni.GetStaticFieldID(\(chainForVar)_cls, "__nativeBytes", "J") {
+          jni.SetStaticLongField(\(chainForVar)_cls, \(chainForVar)_sizeField, JavaLong(MemoryLayout<\(typeName)>.stride))
+        }
+        jni.checkExceptionAndClear()
+
+      """
+      : ""
+
     let registerNatives =
 """
   guard let \(chainForVar)_cls = \(cls_expr) else { return }
+  \(nativeBytes)
   let \(chainForVar)_natives = \(nativesLiteral)
   let \(chainForVar)_result = jni.RegisterNatives(\(chainForVar)_cls, \(chainForVar)_natives)
   NativeRegistrationCheck.check(class: \(chainForVar)_cls,

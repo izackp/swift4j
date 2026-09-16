@@ -44,16 +44,20 @@ public final class SwiftPtr {
   }
 
   /**
-   * @param nativeBytes estimated native footprint of the Swift object, reported
-   *                    to the runtime so ordinary GC pressure accounts for it.
-   *                    A wild guess is acceptable; it only has to be the same
-   *                    value on registration and release, which this class
-   *                    guarantees by remembering it.
+   * @param nativeBytes native footprint of the Swift object, reported to the
+   *                    runtime so ordinary GC pressure accounts for it. This is
+   *                    not bookkeeping that merely has to balance: the runtime
+   *                    cannot see memory held behind a handle, so it is the only
+   *                    reason a collection happens before native memory runs
+   *                    out. Under-reporting buys a crash, not an inaccurate
+   *                    report. Pass zero or less where the size is genuinely
+   *                    unknown, which falls back to a nominal default.
    */
   public SwiftPtr(long ptr, DeinitFn deinit, long nativeBytes) {
     this.ptr = ptr;
     if (deinit != null) {
-      Reaper.register(this, ptr, deinit, Math.max(0L, nativeBytes));
+      Reaper.register(this, ptr, deinit,
+                      nativeBytes > 0L ? nativeBytes : Reaper.DEFAULT_NATIVE_BYTES);
     }
   }
 
