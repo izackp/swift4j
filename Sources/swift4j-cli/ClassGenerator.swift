@@ -113,9 +113,29 @@ extension ClassGenerator: TypeGeneratorProtocol {
     let comparisons = instanceVars.flatMap { $0.serializedFieldComparisons(with: &ctx) }
     let fieldNames = comparisons.map { $0.name }
 
-    // Called by the macro's `toJavaObject`, so it must be public and its
-    // parameter order must match declaration order on both sides.
-    let ctor =
+    // Parameter order must match declaration order on both sides.
+    //
+    // Where a property crosses as another type the public constructor writes it
+    // through its checked setter, so `new Foo("not-a-number")` raises a Java
+    // exception instead of storing a value the reconstruction later traps on.
+    // The marshal path must not pay that check — its values came from Swift —
+    // so it calls the package-private overload, which Java can only tell apart
+    // by an extra parameter.
+    let checkedCtorParams = instanceVars.flatMap { $0.serializedCheckedAssignments() }
+    let ctor = typeDecl.serializedHasCheckedCtor ?
+"""
+  public \(name)(\(ctorParams.joined(separator: ", "))) {
+\(checkedCtorParams.joined(separator: "\n"))
+  }
+
+  /// Unchecked. Called by the Swift marshal path, where every value came from
+  /// Swift and converts by construction. The trailing flag exists only to
+  /// distinguish this constructor from the checked one.
+  \(name)(\((ctorParams + ["boolean __unchecked"]).joined(separator: ", "))) {
+\(assignments.joined(separator: "\n"))
+  }
+"""
+    :
 """
   public \(name)(\(ctorParams.joined(separator: ", "))) {
 \(assignments.joined(separator: "\n"))

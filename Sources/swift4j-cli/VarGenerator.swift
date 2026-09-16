@@ -404,8 +404,16 @@ class VarGenerator {
     serializedDecls.map { "    this.\($0.name) = \($0.name);" }
   }
 
-  func serializedFieldNames() -> [String] {
-    serializedDecls.map { $0.name }
+  /// Assignments for the checked constructor: a writable property that crosses
+  /// as another type goes through its checked setter, which converts in Swift
+  /// and raises a Java exception where the value cannot be represented.
+  func serializedCheckedAssignments() -> [String] {
+    serializedDecls.map {
+      guard $0.marshalling != nil, !$0.readonly else {
+        return "    this.\($0.name) = \($0.name);"
+      }
+      return "    set\($0.capitalizedName)(\($0.name));"
+    }
   }
 
   /// Java's eight primitive names. A field typed as one of these must be

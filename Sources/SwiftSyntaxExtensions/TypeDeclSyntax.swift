@@ -126,6 +126,26 @@ public extension TypeDeclSyntax {
     return true
   }
 
+  /// Whether the serialized peer needs the checked/unchecked constructor pair.
+  ///
+  /// A property carrying `@jvm(as:toJava:toSwift:)` can be handed a Java value
+  /// that `toSwift` refuses, and the all-fields constructor stores it raw — so
+  /// the reconstruction's `try!` traps on the next read, in Swift, with no
+  /// catchable Java frame. The checked constructor writes such a property
+  /// through its own checked setter, which converts in Swift and reports a
+  /// failure as a Java exception at the `new` that caused it.
+  ///
+  /// Both generators read this: the CLI declares the pair, the macro builds the
+  /// descriptor it calls. A disagreement is a missing-constructor failure at
+  /// class-init.
+  var serializedHasCheckedCtor: Bool {
+    guard isSerialized else { return false }
+    return exportedDecls.varDecls
+      .filter { !$0.isStatic }
+      .flatMap { $0.decls }
+      .contains { !$0.computed && $0.marshalling != nil && !$0.readonly }
+  }
+
   var parents: [any TypeDeclSyntax] {
     var parents: [any TypeDeclSyntax] = []
     var cur: any TypeDeclSyntax = self

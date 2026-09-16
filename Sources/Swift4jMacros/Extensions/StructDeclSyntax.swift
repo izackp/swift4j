@@ -27,11 +27,17 @@ extension StructDeclSyntax: JvmValueTypeDeclSyntax {
     // `JPrimitiveConvertible`. Boxing is what the Java side expects anyway:
     // the constructor takes `Integer`, not `int`, for a nullable field.
     if isSerialized {
-      let args = serializedProperties.map { prop -> String in
+      var args = serializedProperties.map { prop -> String in
         let value = prop.javaValue(of: "self")
         return prop.type.is(OptionalTypeSyntax.self)
           ? "JavaParameter(object: \(value).toJavaObject())"
           : "\(value).toJavaParameter()"
+      }
+      // Selects the unchecked constructor. These values came from Swift, so
+      // re-running the conversions the checked one performs would cost a JNI
+      // round trip per marshalled field to reach a conclusion already known.
+      if serializedHasCheckedCtor {
+        args.append("false.toJavaParameter()")
       }
       return
 """

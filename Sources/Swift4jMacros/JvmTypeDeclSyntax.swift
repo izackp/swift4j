@@ -362,7 +362,7 @@ extension JvmTypeDeclSyntax {
           "\(typeName).\(prop.name): cannot build the serialized constructor descriptor — \(error)")
       }
     }
-    return "(\(params.joined()))V"
+    return "(\(params.joined())\(serializedHasCheckedCtor ? "Z" : ""))V"
   }
 
   /// Marshalled instance properties that have storage — the ones a
