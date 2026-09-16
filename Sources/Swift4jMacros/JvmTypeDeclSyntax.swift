@@ -420,9 +420,13 @@ extension JvmTypeDeclSyntax {
       // identity to preserve and nothing to update in place — assign it.
       guard prop.marshalling == nil else { return "  \(assign)" }
 
+      // Cast through `Any`. Every `@jvm` struct conforms to JObjectUpdatable
+      // unconditionally, so for a struct-typed member the direct `as?` is
+      // statically total and the compiler warns about it in every downstream
+      // build — while a leaf such as `String` still has to be tested at runtime.
       let bind = prop.type.is(OptionalTypeSyntax.self)
-        ? "let __v_\(prop.name) = \(value).\(prop.name), let __u_\(prop.name) = __v_\(prop.name) as? JObjectUpdatable"
-        : "let __u_\(prop.name) = \(value).\(prop.name) as? JObjectUpdatable"
+        ? "let __v_\(prop.name) = \(value).\(prop.name), let __u_\(prop.name) = (__v_\(prop.name) as Any) as? JObjectUpdatable"
+        : "let __u_\(prop.name) = (\(value).\(prop.name) as Any) as? JObjectUpdatable"
 
       return
 """
