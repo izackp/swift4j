@@ -66,7 +66,7 @@ extension SwiftArray: JObjectConvertible {
     }
     let peer = JObject(Self.javaClass.create(JavaLong(Int(bitPattern: Unmanaged.passRetained(self).toOpaque()))), weak: true)
     jobj = peer
-    return peer.localRef() ?? peer.ptr
+    return peer.localRef()
   }
 }
 

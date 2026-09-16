@@ -40,7 +40,10 @@ public final class JObjectRef<T: JObjectConvertible & AnyObject>: @unchecked Sen
       let peer = JObject(T.javaClass.callStaticObjectMethod(method: "fromPtr", sig: "(J)\(T.javaSignature)", params)!, weak: true)
       jobj = peer
 
-      return peer.localRef() ?? peer.ptr
+      guard let local = peer.localRef() else {
+        fatalError("JObjectRef.from: NewLocalRef failed for a freshly created peer")
+      }
+      return local
     }
   }
 
