@@ -75,7 +75,7 @@ public func toJavaObject() -> JavaObject? {
       // is — and Swift then promotes the result to the optional silently. That
       // compiles, and calls `CallIntMethod` on a method whose descriptor
       // returns `Integer`, reading an object reference as an int.
-      let assignments = (serializedStoredProperties.map { prop -> String in
+      let assignments = (serializedProperties.map { prop -> String in
         let getter = "__JClass__.get\(prop.capitalizedName)"
         // A property whose type cannot cross is read as its declared Java type
         // and converted back — the `as:` half of `@jvm(as:toJava:toSwift:)`.
@@ -103,7 +103,7 @@ public func toJavaObject() -> JavaObject? {
       return
 """
 public init(_jvmFrom _jvmSource: JObject) {
-  let __jvmFramePushed = jni.PushLocalFrame(\(max(serializedStoredProperties.count, 1) + 4)) >= 0
+  let __jvmFramePushed = jni.PushLocalFrame(\(max(serializedProperties.count, 1) + 4)) >= 0
   defer { if __jvmFramePushed { jni.PopLocalFrame() } }
 \(assignments)
 }

@@ -206,7 +206,7 @@ extension JvmTypeDeclSyntax {
       // GetMethodID per field per object would be paid thousands of times a
       // snapshot. Only emitted where a reconstruction exists to use them.
       let getterIds = isSerializedReconstructible
-        ? serializedStoredProperties.compactMap { prop -> String? in
+        ? serializedProperties.compactMap { prop -> String? in
             guard let jniType = try? prop.type.jniSignature() else { return nil }
             let getter = "get\(prop.capitalizedName)"
             return
@@ -373,16 +373,6 @@ extension JvmTypeDeclSyntax {
       }
     }
     return "(\(params.joined())\(serializedHasCheckedCtor ? "Z" : ""))V"
-  }
-
-  /// Marshalled instance properties that have storage — the ones a
-  /// reconstruction has to assign. Computed properties are marshalled outbound
-  /// and ignored inbound, since assigning one is not possible.
-  var serializedStoredProperties: [VariableDeclSyntax.VarDecl] {
-    exportedDecls.varDecls
-      .filter { !$0.isStatic }
-      .flatMap { $0.decls }
-      .filter { !$0.computed }
   }
 
   /// Body of `updateJavaObject`: writes `self` into an existing peer.

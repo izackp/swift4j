@@ -118,7 +118,7 @@ final class SerializedReconstructionTests: XCTestCase {
     let decl = try XCTUnwrap(structs()["HiddenOptionalStorage"])
     XCTAssertFalse(decl.isSerializedReconstructible,
                    "an unmarshalled Optional is still unmarshalled")
-    XCTAssertEqual(decl.serializedStoredProperties.map { $0.name }, ["id"],
+    XCTAssertEqual(decl.serializedProperties.map { $0.name }, ["id"],
                    "the opted-out property still does not cross")
   }
 
@@ -138,7 +138,7 @@ final class SerializedReconstructionTests: XCTestCase {
   /// nothing to assign, and assigning one would not compile.
   func testComputedAndStaticPropertiesAreNotAssigned() throws {
     let decl = try XCTUnwrap(structs()["FullyMarshalled"])
-    let assigned = decl.serializedStoredProperties.map { $0.name }
+    let assigned = decl.serializedProperties.map { $0.name }
 
     XCTAssertEqual(assigned, ["id", "name"])
     XCTAssertFalse(assigned.contains("derived"))
@@ -176,17 +176,5 @@ final class SerializedReconstructionTests: XCTestCase {
     XCTAssertEqual(verdicts["toJavaParameter"], false)
     XCTAssertEqual(verdicts["realApi"], true,
                    "an ordinary method in the same extension is still bridged")
-  }
-
-  /// Outbound and inbound now agree, because both are storage. A computed
-  /// property used to appear outbound only — carried as a field on the way out,
-  /// ignored on the way back — which made the peer's field set describe
-  /// something other than the value's storage, and made the constructor accept
-  /// an argument the reconstruction discarded.
-  func testOutboundAndInboundAreBothStorage() throws {
-    let decl = try XCTUnwrap(structs()["FullyMarshalled"])
-
-    XCTAssertEqual(decl.serializedProperties.map { $0.name }, ["id", "name"])
-    XCTAssertEqual(decl.serializedStoredProperties.map { $0.name }, ["id", "name"])
   }
 }
