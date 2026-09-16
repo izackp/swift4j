@@ -255,10 +255,25 @@ do {
 
   """
       : ""
+
+    // A property that crosses as some other type is written through the
+    // author's `toSwift`, which can refuse a value this side cannot represent.
+    // That is the caller's mistake, so it reaches Kotlin as an exception at the
+    // line that wrote it rather than being stored and failing later.
+    let assignment = varDecl.marshalling.map { marshalling in
+"""
+do {
+    \(_self).\(varDecl.name) = try (\(marshalling.toSwift.trimmedDescription))(\(mapping.mapped))
+  } catch {
+    jni.throwException(error)
+  }
+"""
+    } ?? "\(_self).\(varDecl.name) = \(mapping.mapped)"
+
     let body =
 """
 \(prologue)\(mapping.stmts.joined(separator: "\n  "))
-\(_self).\(varDecl.name) = \(mapping.mapped)
+\(assignment)
 """
 
     return makeDecl(bridgeName,
@@ -282,7 +297,7 @@ do {
     let returnType = try varDecl.type.jniType()
     let closureParams = closureParams(typeDecl)
     
-    let mapping = try varDecl.type.toJava("\(_self).\(varDecl.name)")
+    let mapping = try varDecl.type.toJava(varDecl.javaValue(of: _self))
     let body =
 """
 \(mapping.stmts.joined(separator: "\n  "))
@@ -371,7 +386,7 @@ return \(mapping.mapped)
     let returnType = try varDecl.type.jniType()
     let closureParams = defaultClosureParams + ["onChange"]
 
-    let mapping = try varDecl.type.toJava("\(_self).\(varDecl.name)")
+    let mapping = try varDecl.type.toJava(varDecl.javaValue(of: _self))
     let body =
 """
 let _onChange = JObject(onChange) 
