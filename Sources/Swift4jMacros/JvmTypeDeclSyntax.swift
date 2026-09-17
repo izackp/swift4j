@@ -226,9 +226,11 @@ extension JvmTypeDeclSyntax {
       // `_setX` of a marshalled property, which its own checked setter writes
       // through. Routing that through the public setter would re-enter the
       // native that is currently running.
-      let writtenProperties = serializedSupportsMutation
-        ? serializedProperties
-        : serializedProperties.filter { $0.marshalling != nil }
+      let writtenProperties = serializedPeerIsReadOnly
+        ? []
+        : serializedSupportsMutation
+          ? serializedProperties
+          : serializedProperties.filter { $0.marshalling != nil }
       let setterIds = writtenProperties.compactMap { prop -> String? in
             guard let jniType = try? prop.type.jniSignature() else { return nil }
             let setter = prop.marshalling != nil
@@ -446,7 +448,8 @@ extension JvmTypeDeclSyntax {
       let varNativeDecls = exportedDecls.varDecls.filter {
         $0.isStatic
           || (serializedDispatchesInstanceMethods && !$0.hasStoredBinding)
-          || (serializedDispatchesInstanceMethods && $0.hasDeclaredMarshalling)
+          || (serializedDispatchesInstanceMethods && $0.hasDeclaredMarshalling
+              && !serializedPeerIsReadOnly)
       }
       let staticVarNatives: [String] = varNativeDecls.flatMap { decl in
         guard let bridgings = try? decl.bridgings(typeDecl: self) else { return [String]() }
@@ -544,22 +547,29 @@ extension JvmTypeDeclSyntax {
     // without this every handle reports a fabricated 512 bytes and a collection
     // that would have freed native memory never happens. A pointer-backed value
     // type's handle is `UnsafeMutablePointer<T>.allocate(capacity: 1)`, so its
-    // footprint is `MemoryLayout<T>.stride` — a real lower bound, not a
-    // guarantee: storage reached through a reference the value holds is not
-    // counted. A class handle boxes a reference and has no comparable number,
-    // so it is left alone.
+    // footprint is `MemoryLayout<T>.stride` — exact only where the storage is
+    // entirely inline. Anything reached through a reference the value holds is
+    // uncounted, and a class handle boxes a reference whose width says nothing
+    // about the instance, so both need `@jvm(nativeBytes:)` to state a number.
     //
     // Written through the peer's field rather than passed to a native, so the
     // registered native set is untouched.
-    let nativeBytes = (!isSerialized && self is any JvmValueTypeDeclSyntax && !(self is EnumDeclSyntax))
-      ? """
+    let sizeExpr: String? = {
+      if isSerialized { return nil }
+      if let declared = declaredNativeBytes { return "JavaLong(\(declared))" }
+      guard self is any JvmValueTypeDeclSyntax, !(self is EnumDeclSyntax) else { return nil }
+      return "JavaLong(MemoryLayout<\(typeName)>.stride)"
+    }()
+
+    let nativeBytes = sizeExpr.map { expr in
+      """
         if let \(chainForVar)_sizeField = jni.GetStaticFieldID(\(chainForVar)_cls, "__nativeBytes", "J") {
-          jni.SetStaticLongField(\(chainForVar)_cls, \(chainForVar)_sizeField, JavaLong(MemoryLayout<\(typeName)>.stride))
+          jni.SetStaticLongField(\(chainForVar)_cls, \(chainForVar)_sizeField, \(expr))
         }
         jni.checkExceptionAndClear()
 
       """
-      : ""
+    } ?? ""
 
     let registerNatives =
 """

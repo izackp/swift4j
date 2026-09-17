@@ -10,9 +10,46 @@ extension EnumGenerator: TypeGeneratorProtocol {
   var isRefType: Bool { return false }
 
   func generate(with ctx: inout ProxyGenerator.Context) -> TypeProxy {
-    return typeDecl.withAssociatedValues
-      ? generateSealedClass(with: &ctx)
-      : generateEnum(with: &ctx)
+    if typeDecl.withAssociatedValues {
+      return typeDecl.isSerialized
+        ? generateSerializedSealedClass(with: &ctx)
+        : generateSealedClass(with: &ctx)
+    }
+    return generateEnum(with: &ctx)
+  }
+
+  /// A serialized payload enum carries each case's payload in the case class
+  /// itself, so the hierarchy holds no `SwiftPtr` and declares no natives. The
+  /// read surface is unchanged — a case's payload is still `instance.name` —
+  /// but it is a stored `val` rather than a getter reaching into Swift.
+  func generateSerializedSealedClass(with ctx: inout ProxyGenerator.Context) -> TypeProxy {
+    let nestedJava = nestedJavaSources(with: &ctx)
+    let nestedBlock = nestedJava.isEmpty ? "" : "\n\n\(nestedJava)"
+
+    // Without natives there is nothing to bind, so class_init exists only for
+    // nested @jvm types that still need theirs run.
+    let classInit = nestedJava.isEmpty ? "" :
+"""
+  private companion object {
+      val class_initialized: Boolean
+      init {
+          \(name)_class_init()
+          class_initialized = true
+      }
+
+      @JvmStatic
+      external fun \(name)_class_init()
+  }
+
+"""
+
+    return KotlinTypeProxy(name: name, source:
+"""
+sealed class \(name) {
+\(classInit)\(typeDecl.caseDecls().map{ $0.generateSerializedCaseType(with: &ctx, in: typeDecl.typeName) }.joined(separator: "\n\n"))\(nestedBlock)
+}
+"""
+    )
   }
 
   func generateSealedClass(with ctx: inout ProxyGenerator.Context) -> TypeProxy {
@@ -141,6 +178,18 @@ fileprivate extension EnumCaseElementSyntax {
       @JvmStatic
       external fun \(jvmExtCtorName)(\(paramDecls)): Long
 """
+  }
+
+  func generateSerializedCaseType(with ctx: inout ProxyGenerator.Context, in enumName: String) -> String {
+    if parameters.isEmpty {
+      return "  object \(kotlinName) : \(enumName)()"
+    }
+
+    let paramDecls = ctx.with(language: .kotlin) { ctx in
+      paramsMapping(with: &ctx).map{ "val \($0.name): \($0.type)" }.joined(separator: ", ")
+    }
+
+    return "  class \(kotlinName)(\(paramDecls)) : \(enumName)()"
   }
 
   func generateCaseType(with ctx: inout ProxyGenerator.Context, in enumName: String) -> String {

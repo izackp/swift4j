@@ -164,3 +164,19 @@ here only because item 1 above will force it to be revisited — note that fixin
   (`[swift4j] …`). Subjects are bare. Footer is `Automated-By: <model name>`.
 - Do not re-pin `Package.resolved` in the monorepo as part of swift4j work —
   that is a separate, deliberate step.
+
+
+## 6. A payload enum's handle still reports the fallback size
+
+`@jvm(nativeBytes:)` is refused on an enum, because `EnumGenerator`'s peer
+declares no `__nativeBytes` field to write. That is honest — the argument would
+otherwise read as applied while changing nothing — but it leaves a real gap: a
+payload enum *is* pointer-backed (`sealed class E(protected val ptr: SwiftPtr)`),
+so every instance reports `SwiftPtr`'s nominal default no matter what it holds.
+
+In CaptureAPI that is `JSONValue` and `FilterValue`, both of which can carry a
+string or a nested collection.
+
+The fix is the same shape as for a class: declare the field in the Kotlin peer,
+have the macro write it at class-init, and lift the refusal. A simple
+raw-value enum is unaffected — it crosses as an ordinal and has no handle.

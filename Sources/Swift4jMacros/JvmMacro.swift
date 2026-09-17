@@ -41,30 +41,70 @@ public struct JvmMacro {
   }
 
   /// `serialized:` means "copy the value across instead of handing out a
-  /// pointer", which only makes sense for a value type with fields.
+  /// pointer".
   ///
-  /// On a **class** it would silently destroy identity: two peers for the same
-  /// Swift object would compare equal, and a write through one would reach a
-  /// copy rather than the object. On an **enum** it is silently ignored —
-  /// EnumGenerator has its own peer shape, so the attribute would read as
-  /// applied while changing nothing.
-  ///
-  /// Both are quiet failures, so they are rejected at expansion instead.
+  /// A **class** is allowed, and gives up identity to say so: two peers for the
+  /// same Swift object no longer compare as one object. The other loss — a
+  /// write through a peer reaching the copy instead of the instance — is not
+  /// the author's to accept silently, so a class's peer is emitted read-only
+  /// (`serializedPeerIsReadOnly`) and there is no setter to write through.
   static func assertSerializedIsApplicable(_ declaration: some DeclGroupSyntax) throws {
     guard isSerialized(declaration) else { return }
 
-    if declaration.is(ClassDeclSyntax.self) {
+    // An enum with associated values is pointer-backed like a struct, and
+    // serializing copies each case's payload into its Java case class. One
+    // without them already crosses as a Java enum constant — by value, with
+    // nothing left behind — so `serialized:` there would claim to change
+    // something that is already true.
+    if let decl = declaration.as(EnumDeclSyntax.self), !decl.withAssociatedValues {
       throw JvmMacrosError.message(
-        "@jvm(serialized:) cannot be applied to a class. Serializing copies the "
-        + "value across the boundary, which would discard the reference identity "
-        + "a class has by definition: two peers for the same object would compare "
-        + "equal, and a write through one would not reach the other.")
+        "@jvm(serialized:) is redundant on an enum with no associated values. "
+        + "It already crosses as a Java enum constant, which carries no "
+        + "pointer and holds no native memory.")
+    }
+  }
+
+  /// `nativeBytes:` states what one handle stands for, so it is meaningful only
+  /// where a handle exists and where something writes the peer's
+  /// `__nativeBytes` field.
+  ///
+  /// A serialized peer holds no pointer, and EnumGenerator's peer declares no
+  /// such field, so in both cases the argument would read as applied while
+  /// changing nothing. A zero or negative count is rejected for the same
+  /// reason: `SwiftPtr` treats anything not positive as "unstated" and falls
+  /// back to its default.
+  static func assertNativeBytesIsApplicable(_ declaration: some DeclGroupSyntax) throws {
+    var argument: LabeledExprSyntax?
+    for element in declaration.attributes {
+      guard case .attribute(let attr) = element,
+            attr.attributeName.as(IdentifierTypeSyntax.self)?.name.text == "jvm",
+            case .argumentList(let args)? = attr.arguments else { continue }
+      if let match = args.first(where: { $0.label?.text == "nativeBytes" }) { argument = match }
+    }
+    guard let argument else { return }
+
+    if isSerialized(declaration) {
+      throw JvmMacrosError.message(
+        "@jvm(nativeBytes:) has no meaning alongside serialized: true. A "
+        + "serialized peer carries copied fields and holds no native memory, so "
+        + "there is no footprint for the collector to account for.")
     }
 
     if declaration.is(EnumDeclSyntax.self) {
       throw JvmMacrosError.message(
-        "@jvm(serialized:) is not supported on an enum. Enums generate a "
-        + "different peer shape, so the attribute would be silently ignored.")
+        "@jvm(nativeBytes:) is not supported on an enum. Enums generate a "
+        + "different peer shape, which declares no __nativeBytes field, so the "
+        + "argument would be silently ignored.")
+    }
+
+    guard let literal = argument.expression.as(IntegerLiteralExprSyntax.self),
+          let value = Int(String(literal.literal.text.filter { $0 != "_" })),
+          value > 0
+    else {
+      throw JvmMacrosError.message(
+        "@jvm(nativeBytes:) takes a positive integer literal. It is read out of "
+        + "the source by the macro, so an expression cannot be evaluated, and a "
+        + "count of zero or less is indistinguishable from leaving it unstated.")
     }
   }
 
@@ -160,6 +200,7 @@ extension JvmMacro: MemberMacro {
 
     try assert(context: context)
     try assertSerializedIsApplicable(declaration)
+    try assertNativeBytesIsApplicable(declaration)
     try assertDeclaredMarshallingIsUsable(declaration)
     try assertSerializedStoredPropertiesAreVisible(declaration)
 

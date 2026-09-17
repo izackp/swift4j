@@ -220,6 +220,34 @@ public final class SerializedRoundTripTest {
         check("null optionals reconstruct as nil",
               SerializedBridge.sumOptionalPrimitives(none), 0L);
 
+        // A serialized class. Copying a class's fields works exactly as it does
+        // for a struct; what it costs is identity and write-through. Identity is
+        // given up by writing `serialized:`. The silent write is prevented by
+        // emitting no setter at all, which is what these check.
+        Swift4jFixtures.Snapshot snap = new Swift4jFixtures.Snapshot("a", 2, "n");
+        check("a class peer carries its fields", snap.getLabel(), "a");
+        check("including a primitive", snap.getCount(), 2L);
+        check("including an optional", snap.getNote(), "n");
+
+        checkTrue("no field is writable",
+                  java.util.Arrays.stream(Swift4jFixtures.Snapshot.class.getMethods())
+                      .noneMatch(m -> m.getName().startsWith("set")));
+        checkTrue("no pointer accessor survives",
+                  java.util.Arrays.stream(Swift4jFixtures.Snapshot.class.getDeclaredMethods())
+                      .noneMatch(m -> m.getName().equals("_ptr")));
+
+        check("Swift rebuilds the instance from the peer", snap.describe(), "a:2:n");
+        check("an absent optional rebuilds as nil",
+              new Swift4jFixtures.Snapshot("b", 0, null).describe(), "b:0:nil");
+
+        // Value equality, which the object it was copied from never had.
+        checkTrue("two snapshots of equal fields are equal",
+                  snap.equals(new Swift4jFixtures.Snapshot("a", 2, "n")));
+
+        Swift4jFixtures.Reading2 built = Swift4jFixtures.Reading2.make(4);
+        check("a serialized value carries a serialized class", built.getSnapshot().getLabel(), "l4");
+        check("with its own fields intact", built.getSnapshot().getCount(), 4L);
+
         if (failures > 0) {
             System.out.println("\n" + failures + " serialized round-trip check(s) failed");
             System.exit(1);

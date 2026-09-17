@@ -10,7 +10,9 @@ import SwiftSyntaxExtensions
 
 extension EnumDeclSyntax: JvmValueTypeDeclSyntax {
   func expandMembers(in context: some MacroExpansionContext) throws -> [DeclSyntax] {
-    let caseGetters = try caseDecls().compactMap {
+    // A serialized peer reads its payload out of its own Java fields, so there
+    // is no native getter to back and nothing registers one.
+    let caseGetters = isSerialized ? "" : try caseDecls().compactMap {
       try $0.makeBridgingGetterDecls(typeDecl: self)
     }.joined(separator: "\n")
 
@@ -21,10 +23,11 @@ extension EnumDeclSyntax: JvmValueTypeDeclSyntax {
     let caseJClassDecls: String
     if withAssociatedValues {
       let fqn = fqn(from: context)
-      caseJClassDecls = caseDecls().map {
-        let caseName = $0.name.text
+      caseJClassDecls = caseDecls().map { c in
+        let caseName = c.name.text
         let caseClass = fqn + "$" + caseName
-        return
+
+        let jclassDecl =
 """
 private static let \(caseName)_javaClass: JClass = {
   guard let cls = JClass(fqn: "\(caseClass)") else {
@@ -32,9 +35,31 @@ private static let \(caseName)_javaClass: JClass = {
   }
   return cls
 }()
+"""
+        // A serialized case is built through its own constructor, taking the
+        // payload by value. A pointer-backed one is built from an address, so
+        // it goes through the static `fromPtr` the Kotlin peer declares.
+        guard isSerialized else {
+          return
+"""
+\(jclassDecl)
 private static let \(caseName)_fromPtr: JavaMethodID = {
   guard let mid = \(caseName)_javaClass.getStaticMethodID(name: "fromPtr", sig: "(J)L\(caseClass);") else {
     fatalError("Could not find \(caseClass).fromPtr")
+  }
+  return mid
+}()
+"""
+        }
+        guard !c.parameters.isEmpty else { return jclassDecl }
+
+        let ctorSig = (try? c.serializedCtorSignature()) ?? "()V"
+        return
+"""
+\(jclassDecl)
+private static let \(caseName)_ctor: JavaMethodID = {
+  guard let mid = \(caseName)_javaClass.getMethodID(name: "<init>", sig: "\(ctorSig)") else {
+    fatalError("Could not find \(caseClass).<init>\(ctorSig)")
   }
   return mid
 }()
@@ -53,6 +78,9 @@ private static let \(caseName)_fromPtr: JavaMethodID = {
   }
 
   func expandJavaObjectDecls(in context: some MacroExpansionContext) throws -> String {
+    if isSerialized {
+      return try expandJavaObjectDeclsAsSerializedCases(in: context)
+    }
     if withAssociatedValues {
       return try expandJavaObjectDeclsAsClass(in: context)
     } else {
@@ -60,7 +88,65 @@ private static let \(caseName)_fromPtr: JavaMethodID = {
     }
   }
 
+  /// Which case a serialized peer holds is its Java class, so the inbound
+  /// conversion asks JNI directly rather than reading a discriminator field.
+  /// Nothing is added to the peer's surface for the sake of the question.
+  func expandJavaObjectDeclsAsSerializedCases(in context: some MacroExpansionContext) throws -> String {
+    let branches = try caseDecls().map { c -> String in
+      let caseName = c.name.text
+      guard !c.parameters.isEmpty else {
+        return
+"""
+  if jni.IsInstanceOf(obj, Self.\(caseName)_javaClass.ptr) != 0 {
+    return .\(caseName)
+  }
+"""
+      }
+
+      let reads = try c.parameters.map { p -> String in
+        let getter = try c.serializedGetterName(of: p)
+        // The case is reconstructed by calling it, so a labelled payload has
+        // to be passed by label — an unlabelled one must not be.
+        let label = p.passedName.map { "\($0): " } ?? ""
+        guard let wrapped = p.type.as(OptionalTypeSyntax.self)?.wrappedType else {
+          return label + "__o.call(method: \"\(getter)\")"
+        }
+        return label
+          + "__o.callObjectMethod(method: \"\(getter)\", sig: \"()\(try p.type.jniSignature(primitivesAsObjects: true))\", [])"
+          + ".map { \(wrapped.trimmedDescription).fromJavaObject($0) }"
+      }.joined(separator: ",\n      ")
+
+      return
+"""
+  if jni.IsInstanceOf(obj, Self.\(caseName)_javaClass.ptr) != 0 {
+    return .\(caseName)(
+      \(reads)
+    )
+  }
+"""
+    }.joined(separator: "\n")
+
+    return
+"""
+public static func fromJavaObject(_ obj: JavaObject?) -> Self {
+  guard let obj else {
+    fatalError("\(typeName).fromJavaObject received null")
+  }
+  let __o = JObject(obj)
+\(branches)
+  fatalError("\(typeName).fromJavaObject received an object of no known case")
+}
+
+public func toJavaObject() -> JavaObject? {
+  \(expandToJavaObject(in: context))
+}
+"""
+  }
+
   func expandCtorDecls(in context: some MacroExpansionContext) throws -> String {
+    // A serialized case carries its payload in Java fields, so there is no
+    // allocation to make from Java and no address to free.
+    if isSerialized { return "" }
     if withAssociatedValues {
       let caseCtors = try caseDecls().map {
         try $0.makeBridgingDecls(typeDecl: self)
@@ -80,12 +166,32 @@ private static let \(caseName)_fromPtr: JavaMethodID = {
 
   func expandToJavaObject(in context: some MacroExpansionContext) -> String {
     let fqn = fqn(from: context)
-    let toJavaCases = caseDecls().map {
-      let caseName = $0.name.text
+    let toJavaCases = caseDecls().map { c in
+      let caseName = c.name.text
       let caseFqn = fqn + "$" + caseName
       let caseJClass = "Self.\(caseName)_javaClass"
 
-      if $0.parameters.isEmpty {
+      // A payload-free case is a Kotlin `object` either way: one instance,
+      // reached through INSTANCE, with nothing to copy.
+      if !c.parameters.isEmpty && isSerialized {
+        let bindings = (0..<c.parameters.count).map { "let __v\($0)" }.joined(separator: ", ")
+        let args = c.parameters.enumerated().map { i, p in
+          p.type.is(OptionalTypeSyntax.self)
+            ? "JavaParameter(object: __v\(i).toJavaObject())"
+            : "__v\(i).toJavaParameter()"
+        }.joined(separator: ", ")
+
+        return
+"""
+case .\(caseName)(\(bindings)):
+  let __jvmFramePushed = jni.PushLocalFrame(\(c.parameters.count + 4)) >= 0
+  let __jvmPeer = \(caseJClass).create(ctor: Self.\(caseName)_ctor, [\(args)])
+  guard __jvmFramePushed else { return __jvmPeer }
+  return jni.PopLocalFrame(__jvmPeer)
+"""
+      }
+
+      if c.parameters.isEmpty {
         return
 """
 case .\(caseName):
@@ -111,7 +217,9 @@ switch self {
   }
 
   func expandRegisterNatives(in context: some MacroExpansionContext, parents: [any TypeDeclSyntax], namespacePath: [String]) throws -> String {
-    guard withAssociatedValues else { return "" }
+    // A serialized peer declares no natives at all, so there is no batch to
+    // register and no __nativeBytes field to write.
+    guard withAssociatedValues, !isSerialized else { return "" }
     return try expandRegisterNativesDefault(in: context, parents: parents, namespacePath: namespacePath)
   }
 
@@ -120,7 +228,7 @@ switch self {
     // (INSTANCE / ordinal), not pointer-backed. They have no deinit_jni and
     // no init/var/func natives — return nothing so callers don't emit a stale
     // RegisterNatives block referencing a non-existent `Type.deinit_jni`.
-    guard withAssociatedValues else { return [] }
+    guard withAssociatedValues, !isSerialized else { return [] }
 
     let fqn = fqn(with: parents)
 

@@ -19,6 +19,22 @@ extension EnumCaseElementSyntax {
     try "(\(jniSignatures().joined()))J"
   }
 
+  /// The serialized case class's constructor descriptor.
+  ///
+  /// Derived from the native's descriptor rather than rebuilt, because the
+  /// Kotlin constructor and the `<case>Impl` native take the same parameter
+  /// list from the same mapping — only the native hands back a pointer where
+  /// the constructor returns nothing.
+  func serializedCtorSignature() throws -> String {
+    try String(jniSignature().dropLast()) + "V"
+  }
+
+  /// Kotlin exposes a constructor `val` as a JavaBean getter, so a payload
+  /// named `value` is read back through `getValue()`.
+  func serializedGetterName(of param: ParameterSyntax) throws -> String {
+    try "get" + param.name.prefix(1).uppercased() + param.name.dropFirst()
+  }
+
   func makeBridgingDecls(typeDecl: any JvmTypeDeclSyntax) throws -> String {
     let name = name.text
 

@@ -104,7 +104,8 @@ let package = Package(
                       "Swift4jMacros",
                       "swift4j-cli",
                       "SwiftSyntaxExtensions",
-                      .product(name: "SwiftParser", package: "swift-syntax")
+                      .product(name: "SwiftParser", package: "swift-syntax"),
+                      .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax")
                     ])
     ]
 )

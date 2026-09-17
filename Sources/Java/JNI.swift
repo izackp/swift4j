@@ -100,6 +100,8 @@ public struct JNI {
 
   public func IsSameObject(_ obj1: JavaObject, _ obj2: JavaObject) -> JavaBoolean { env { $0.IsSameObject($1, obj1, obj2) } }
 
+  public func IsInstanceOf(_ obj: JavaObject, _ cls: JavaClass) -> JavaBoolean { env { $0.IsInstanceOf($1, obj, cls) } }
+
   /// Opens a local-reference frame; every local made until the matching
   /// ``PopLocalFrame(_:)`` is released together.
   ///

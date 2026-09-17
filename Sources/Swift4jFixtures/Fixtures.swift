@@ -158,6 +158,47 @@ public enum Shape {
   case square(side: Int)
 }
 
+/// The same hierarchy, serialized: each case class stores its own payload, so
+/// no case holds a pointer and nothing has to be reclaimed. A payload-free case
+/// stays a Kotlin `object`, which it was already.
+@jvm(serialized: true)
+public enum Reading {
+  case none
+  case count(value: Int)
+  case labelled(name: String, value: Int)
+  case optional(note: String?)
+}
+
+/// A serialized value carrying a serialized payload enum, which is the shape
+/// that made enum support necessary: without it this struct would copy its own
+/// fields while `reading` stayed a pointer back into Swift.
+@jvm(serialized: true)
+public struct Sample {
+  public var id: Int
+  public var reading: Reading
+
+  public init(id: Int, reading: Reading) {
+    self.id = id
+    self.reading = reading
+  }
+
+  /// Forces the inbound conversion: the receiver is rebuilt from the peer,
+  /// which reconstructs `reading` from whichever case class arrived.
+  public func describe() -> String {
+    switch reading {
+    case .none: return "\(id):none"
+    case .count(let v): return "\(id):count(\(v))"
+    case .labelled(let n, let v): return "\(id):labelled(\(n),\(v))"
+    case .optional(let n): return "\(id):optional(\(n ?? "nil"))"
+    }
+  }
+
+  /// Forces the outbound conversion, with no peer involved on the way in.
+  public static func make(value: Int) -> Reading {
+    value < 0 ? .none : .labelled(name: "n\(value)", value: value)
+  }
+}
+
 /// Enum-typed properties, to see what a getter/setter looks like for each kind
 /// and whether either can be scoped.
 ///
@@ -185,6 +226,48 @@ public class Holder {
   public init(count: Int, leaf: Leaf) {
     self.count = count
     self.leaf = leaf
+  }
+}
+
+/// A serialized class: its peer copies the fields and, unlike a serialized
+/// struct, exposes no setter for any of them. A write through a snapshot would
+/// reach the copy and never the object it came from, so there is nothing to
+/// write through.
+///
+/// Non-final on purpose — that is what forces `init(_jvmFrom:)` to be
+/// `required`, since `fromJavaObject` returns `Self`.
+@jvm(serialized: true)
+public class Snapshot {
+  public var label: String
+  public var count: Int
+  public var note: String?
+
+  public init(label: String, count: Int, note: String? = nil) {
+    self.label = label
+    self.count = count
+    self.note = note
+  }
+
+  public func describe() -> String {
+    "\(label):\(count):\(note ?? "nil")"
+  }
+}
+
+/// A serialized value holding a serialized class, which is the shape that made
+/// class support necessary: without it this struct copies its own fields while
+/// `snapshot` stays a pointer back into Swift.
+@jvm(serialized: true)
+public struct Reading2 {
+  public var id: Int
+  public var snapshot: Snapshot
+
+  public init(id: Int, snapshot: Snapshot) {
+    self.id = id
+    self.snapshot = snapshot
+  }
+
+  public static func make(id: Int) -> Reading2 {
+    Reading2(id: id, snapshot: Snapshot(label: "l\(id)", count: id, note: id > 0 ? "n\(id)" : nil))
   }
 }
 

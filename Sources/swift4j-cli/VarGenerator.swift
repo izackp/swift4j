@@ -386,9 +386,9 @@ class VarGenerator {
   /// pattern works: copy, mutate, hand back. A `let` has nothing to write to,
   /// so it stays final — which is now the only reason a field is final, since
   /// the fields are storage and nothing else.
-  func serializedFieldDecls(with ctx: inout Context) -> String {
+  func serializedFieldDecls(with ctx: inout Context, readOnly: Bool = false) -> String {
     serializedDecls.map {
-      let modifier = $0.readonly ? "private final" : "private"
+      let modifier = (readOnly || $0.readonly) ? "private final" : "private"
       return "  \(modifier) \($0.type.map(with: &ctx)) \($0.name);"
     }.joined(separator: "\n")
   }
@@ -407,9 +407,9 @@ class VarGenerator {
   /// Assignments for the checked constructor: a writable property that crosses
   /// as another type goes through its checked setter, which converts in Swift
   /// and raises a Java exception where the value cannot be represented.
-  func serializedCheckedAssignments() -> [String] {
+  func serializedCheckedAssignments(readOnly: Bool = false) -> [String] {
     serializedDecls.map {
-      guard $0.marshalling != nil, !$0.readonly else {
+      guard $0.marshalling != nil, !$0.readonly, !readOnly else {
         return "    this.\($0.name) = \($0.name);"
       }
       return "    set\($0.capitalizedName)(\($0.name));"
@@ -454,7 +454,7 @@ class VarGenerator {
   /// peer nobody hands back, a write now stays local — which is the honest
   /// behaviour for a detached copy, and the reason `@io.scade.swift4j.SwiftMutating`
   /// is not emitted here: nothing Swift-side is being mutated.
-  func generateSerialized(with ctx: inout Context) -> String {
+  func generateSerialized(with ctx: inout Context, readOnly: Bool = false) -> String {
     serializedDecls.map { decl in
       let type = decl.type.map(with: &ctx)
       let getter =
@@ -463,7 +463,7 @@ class VarGenerator {
     return \(decl.name);
   }
 """
-      guard !decl.readonly else { return getter }
+      guard !decl.readonly, !readOnly else { return getter }
 
       // A property that crosses as some other type can be handed a value this
       // side cannot represent — a malformed uuid string, say. That is a caller's

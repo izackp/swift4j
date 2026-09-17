@@ -50,6 +50,34 @@ public extension TypeDeclSyntax {
     return false
   }
 
+  /// The native footprint one handle stands for, in bytes, as declared by
+  /// `@jvm(nativeBytes:)`.
+  ///
+  /// `MemoryLayout<T>.stride` is the right number only for a value type whose
+  /// storage is entirely inline. A type that holds a `String`, an `Array`, a
+  /// `Data` or a class reference owns heap the stride does not count, and a
+  /// class handle boxes a reference whose width says nothing at all about the
+  /// instance behind it. In both cases the declared number is the only one
+  /// available, and under-reporting is what lets a generation's worth of
+  /// handles accumulate without the collector ever seeing a reason to run.
+  ///
+  /// `nil` when unstated, which leaves the existing behaviour: stride for a
+  /// non-enum value type, and `SwiftPtr`'s nominal default for everything else.
+  var declaredNativeBytes: Int? {
+    for element in exportAttributes {
+      guard case .attribute(let attr) = element,
+            case .argumentList(let args)? = attr.arguments else { continue }
+
+      for arg in args where arg.label?.text == "nativeBytes" {
+        guard let literal = arg.expression.as(IntegerLiteralExprSyntax.self),
+              let value = Int(String(literal.literal.text.filter { $0 != "_" }))
+        else { continue }
+        return value
+      }
+    }
+    return nil
+  }
+
   /// Whether a Java value of this type carries enough to rebuild the Swift one.
   ///
   /// False when the type has a stored property that is neither marshalled nor
@@ -114,8 +142,21 @@ public extension TypeDeclSyntax {
   /// unmarshalled stored property has no field to copy back to, and a `let` has
   /// no setter to write through, so the mutation would vanish silently — worse
   /// than refusing the method.
+  /// Whether the serialized peer is emitted without setters.
+  ///
+  /// True for a class, and the reason a class may be serialized at all. Copying
+  /// a class's stored properties into the peer works exactly as it does for a
+  /// struct, but the two losses are real: two peers for one object stop being
+  /// the same object, and a write through a peer reaches the copy, not the
+  /// instance. Identity is the author's to give up by writing `serialized:`.
+  /// The silent write is not, so it is made unrepresentable — no setter is
+  /// emitted, and no native is registered for one.
+  var serializedPeerIsReadOnly: Bool {
+    isSerialized && self is ClassDeclSyntax
+  }
+
   var serializedSupportsMutation: Bool {
-    guard isSerialized else { return false }
+    guard isSerialized, !serializedPeerIsReadOnly else { return false }
     for member in memberBlock.members {
       guard let decl = member.decl.as(VariableDeclSyntax.self),
             !decl.isStatic else { continue }
@@ -139,7 +180,9 @@ public extension TypeDeclSyntax {
   /// descriptor it calls. A disagreement is a missing-constructor failure at
   /// class-init.
   var serializedHasCheckedCtor: Bool {
-    guard isSerialized else { return false }
+    // The checked constructor writes through the setters, which a read-only
+    // peer does not have.
+    guard isSerialized, !serializedPeerIsReadOnly else { return false }
     return exportedDecls.varDecls
       .filter { !$0.isStatic }
       .flatMap { $0.decls }

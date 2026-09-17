@@ -103,6 +103,7 @@ if [ "$kt_count" != "0" ] && [ "$kotlin_ok" = "1" ]; then
     kotlinc_cmd -nowarn -d "$classes" \
         @"$out/kt-sources.txt" \
         "$root/Tests/JvmIntegration/PayloadEnumTest.kt" \
+        "$root/Tests/JvmIntegration/SerializedEnumTest.kt" \
         $(find "$java_src" -name '*.java') \
         $(find "$root/Sources/Swift4j/java" -name '*.java') \
         "$stubs"/*.java
@@ -151,6 +152,12 @@ if [ "$kt_count" != "0" ] && [ "$kotlin_ok" = "1" ]; then
         -Djava.library.path="$libdir" \
         -cp "$runtime_cp" \
         PayloadEnumTest || status=1
+
+    echo "==> serialized enum round trip"
+    "$JAVA_HOME/bin/java" \
+        -Djava.library.path="$libdir" \
+        -cp "$runtime_cp" \
+        SerializedEnumTest || status=1
 fi
 
 # Memory-safety hazards. These can take the JVM down rather than fail an

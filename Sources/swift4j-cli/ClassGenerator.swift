@@ -102,7 +102,9 @@ extension ClassGenerator: TypeGeneratorProtocol {
       ? methodGens.filter { !$0.isStatic && (typeDecl.serializedSupportsMutation || !$0.isMutating) }
       : []
 
-    let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx) }
+    let readOnlyPeer = typeDecl.serializedPeerIsReadOnly
+
+    let fields = instanceVars.map { $0.serializedFieldDecls(with: &ctx, readOnly: readOnlyPeer) }
       .filter { !$0.isEmpty }
       .joined(separator: "\n")
 
@@ -119,7 +121,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
     // The marshal path must not pay that check — its values came from Swift —
     // so it calls the package-private overload, which Java can only tell apart
     // by an extra parameter.
-    let checkedCtorParams = instanceVars.flatMap { $0.serializedCheckedAssignments() }
+    let checkedCtorParams = instanceVars.flatMap { $0.serializedCheckedAssignments(readOnly: readOnlyPeer) }
     let ctor = typeDecl.serializedHasCheckedCtor ?
 """
   public \(name)(\(ctorParams.joined(separator: ", "))) {
@@ -150,7 +152,7 @@ extension ClassGenerator: TypeGeneratorProtocol {
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
 
-    let accessors = instanceVars.map { $0.generateSerialized(with: &ctx) }
+    let accessors = instanceVars.map { $0.generateSerialized(with: &ctx, readOnly: readOnlyPeer) }
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
 
@@ -212,10 +214,10 @@ public \(nested ? "static" : "") class \(name) {
   }
 
   func generate(with ctx: inout Context) -> TypeProxy {
-    // Structs only, matching the macro, which rejects `serialized:` on a class
-    // outright. Honouring it here for a class would emit a value peer for a
-    // type whose expansion refuses to compile.
-    if typeDecl.isSerialized && typeDecl is StructDeclSyntax {
+    // Structs and classes both. A class's peer is emitted without setters —
+    // see `serializedPeerIsReadOnly` — because a write through a snapshot
+    // would reach the copy and never the object it was taken from.
+    if typeDecl.isSerialized {
       return generateSerialized(with: &ctx)
     }
     // Only a type that hands out a scope needs the flag, and only such a type
