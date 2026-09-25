@@ -54,12 +54,9 @@ public func execWithFuture<T: JConvertible & Sendable>(
     let res: Result<JavaObject?, Error>
     do {
       let value = try await cl()
-      let local = value.toJavaObject()
-      if let local {
-        res = .success(jni.NewGlobalRef(local))
-      } else {
-        res = .success(nil)
-      }
+      res = .success(withLocalFrame {
+        value.toJavaObject().flatMap { jni.NewGlobalRef($0) }
+      })
     } catch {
       res = .failure(error)
     }
@@ -70,7 +67,7 @@ public func execWithFuture<T: JConvertible & Sendable>(
           _ = future.complete(val)
           if let val { jni.DeleteGlobalRef(val) }
         case .failure(let err):
-          _ = future.complete(err)
+          withLocalFrame { _ = future.complete(err) }
       }
     }
   }
@@ -97,7 +94,7 @@ public func execWithFuture(_ cl: @Sendable @escaping () async throws -> Void) ->
     await MainActor.run {
       switch res {
         case .success(let val): _ = future.complete()
-        case .failure(let err): _ = future.complete(err)
+        case .failure(let err): withLocalFrame { _ = future.complete(err) }
       }
     }
   }
@@ -105,5 +102,11 @@ public func execWithFuture(_ cl: @Sendable @escaping () async throws -> Void) ->
   return javaObject
 }
 
+
+private func withLocalFrame<R>(_ body: () -> R) -> R {
+  let pushed = jni.PushLocalFrame(16) >= 0
+  defer { if pushed { jni.PopLocalFrame() } }
+  return body()
+}
 
 private let JCompletableFuture__class = JClass(fqn: "java/util/concurrent/CompletableFuture")
