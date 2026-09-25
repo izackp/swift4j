@@ -1,9 +1,13 @@
 
-struct JCompletableFuture {
-  private let jobj: JObject
+final class JCompletableFuture: @unchecked Sendable {
+  private var jobj: JObject?
 
   init(_ ptr: JavaObject) {
     jobj = JObject(ptr)
+  }
+
+  func release() {
+    jobj = nil
   }
 
   func complete<T: JConvertible>(_ value: T) -> Bool {
@@ -11,19 +15,19 @@ struct JCompletableFuture {
   }
 
   func complete<T: Error>(_ error: T) -> Bool {
-    return jobj.call(method: "completeExceptionally",
-                     sig: "(Ljava/lang/Throwable;)Z",
-                     [JavaParameter(object: error.toJavaObject())])
+    return jobj!.call(method: "completeExceptionally",
+                      sig: "(Ljava/lang/Throwable;)Z",
+                      [JavaParameter(object: error.toJavaObject())])
   }
 
   func complete(_ value: JavaObject?) -> Bool {
-    return jobj.call(method: "complete", sig: "(Ljava/lang/Object;)Z",
-                     [JavaParameter(object: value)])
+    return jobj!.call(method: "complete", sig: "(Ljava/lang/Object;)Z",
+                      [JavaParameter(object: value)])
   }
 
   func complete() -> Bool {
-    return jobj.call(method: "complete", sig: "(Ljava/lang/Object;)Z",
-                     [JavaParameter(object: nil)])
+    return jobj!.call(method: "complete", sig: "(Ljava/lang/Object;)Z",
+                      [JavaParameter(object: nil)])
   }
 }
 
@@ -69,6 +73,7 @@ public func execWithFuture<T: JConvertible & Sendable>(
         case .failure(let err):
           withLocalFrame { _ = future.complete(err) }
       }
+      future.release()
     }
   }
 
@@ -96,6 +101,7 @@ public func execWithFuture(_ cl: @Sendable @escaping () async throws -> Void) ->
         case .success(let val): _ = future.complete()
         case .failure(let err): withLocalFrame { _ = future.complete(err) }
       }
+      future.release()
     }
   }
 
