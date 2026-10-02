@@ -92,24 +92,24 @@ public macro jvm<Value, Raw>(as: Raw.Type,
 // consumers see the annotated types as plain Swift declarations.
 @attached(peer)
 public macro jvm(serialized: Bool = false, nativeBytes: Int = 0) =
-  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jNoOpMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro jvm<Value, Raw>(as: Raw.Type,
                              toJava: (Value) -> Raw,
                              toSwift: (Raw) throws -> Value) =
-  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jNoOpMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro jvm_exported() =
-  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jNoOpMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro jvmBinding() =
-  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jNoOpMacros", type: "NoOpPeerMacro")
 
 @attached(peer)
 public macro nonjvm() =
-  #externalMacro(module: "Swift4jMacros", type: "NoOpPeerMacro")
+  #externalMacro(module: "Swift4jNoOpMacros", type: "NoOpPeerMacro")
 
 #endif

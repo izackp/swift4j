@@ -50,10 +50,13 @@ let package = Package(
                    .product(name: "SwiftCompilerPlugin", package: "swift-syntax")
                ]),
 
+        .macro(name: "Swift4jNoOpMacros"),
+
         .target(name: "Swift4j",
                 dependencies: [
                   "Java",
-                  "Swift4jMacros"
+                  .target(name: "Swift4jMacros", condition: .when(platforms: [.android])),
+                  "Swift4jNoOpMacros"
                 ],
                 resources: [
                   .process("java/io/scade/swift4j/Result.java"),
